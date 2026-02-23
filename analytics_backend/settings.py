@@ -82,20 +82,29 @@ WSGI_APPLICATION = 'analytics_backend.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 # Replace the DATABASES section of your settings.py with this
-tmpPostgres = urlparse(os.getenv("DATABASE_URL"))
+tmpMarketplacePostgres = urlparse(os.getenv("MARKETPLACE_DATABASE_URL"))
+tmpAnalyticsPostgres = urlparse(os.getenv("ANALYTICS_DATABASE_URL"))
 
 DATABASES = {
-    'default': {
+    'marketplace': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': tmpPostgres.path.replace('/', ''),
-        'USER': tmpPostgres.username,
-        'PASSWORD': tmpPostgres.password,
-        'HOST': tmpPostgres.hostname,
+        'NAME': tmpMarketplacePostgres.path.replace('/', ''),
+        'USER': tmpMarketplacePostgres.username,
+        'PASSWORD': tmpMarketplacePostgres.password,
+        'HOST': tmpMarketplacePostgres.hostname,
         'PORT': 5432,
-        'OPTIONS': dict(parse_qsl(tmpPostgres.query)),
+        'OPTIONS': dict(parse_qsl(tmpMarketplacePostgres.query)),
+    },
+    'analytics': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': tmpAnalyticsPostgres.path.replace('/', ''),
+        'USER': tmpAnalyticsPostgres.username,
+        'PASSWORD': tmpAnalyticsPostgres.password,
+        'HOST': tmpAnalyticsPostgres.hostname,
+        'PORT': 5432,
+        'OPTIONS': dict(parse_qsl(tmpAnalyticsPostgres.query)),
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
