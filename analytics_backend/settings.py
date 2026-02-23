@@ -32,7 +32,7 @@ SECRET_KEY = 'django-insecure-1%vtl=_i8gjig+!@f2ofw-j*_=2h(q0=8en98@(#!l&bac^uo6
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1', '.vercel.app']
 
 
 # Application definition
@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'marketplace_analytics.apps.MarketplaceAnalyticsConfig',
+    'marketplace_analytics',
 ]
 
 MIDDLEWARE = [
