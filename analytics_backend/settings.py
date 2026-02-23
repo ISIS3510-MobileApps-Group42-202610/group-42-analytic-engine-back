@@ -95,7 +95,7 @@ DATABASES = {
         'PORT': 5432,
         'OPTIONS': dict(parse_qsl(tmpMarketplacePostgres.query)),
     },
-    'analytics': {
+    'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': tmpAnalyticsPostgres.path.replace('/', ''),
         'USER': tmpAnalyticsPostgres.username,
