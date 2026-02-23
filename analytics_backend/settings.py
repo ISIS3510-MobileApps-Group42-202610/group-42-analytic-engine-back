@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'marketplace_analytics',
+    'marketplace_analytics.apps.MarketplaceAnalyticsConfig',
 ]
 
 MIDDLEWARE = [
@@ -75,7 +75,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'analytics_backend.wsgi.application'
+WSGI_APPLICATION = 'analytics_backend.wsgi.app'
 
 
 # Database
