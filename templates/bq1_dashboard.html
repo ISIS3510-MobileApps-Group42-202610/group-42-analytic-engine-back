@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}BQ1: Startup & Latency - Analytics Dashboard{% endblock %}
+{% block nav_bq1 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ Type 1)</h3>
+    <p>What is the average app startup time and screen-to-screen navigation latency across different device models during peak usage periods?</p>
+</div>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Avg Startup Time (Peak)</div>
+        <div class="value">{{ overall_startup }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Navigation Latency (Peak)</div>
+        <div class="value">{{ overall_nav }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Peak Hour Events</div>
+        <div class="value">{{ peak_count }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Device Models</div>
+        <div class="value">{{ device_count }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Total Events (10 days)</div>
+        <div class="value">{{ total_events }}</div>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Avg Startup Time by Device <span class="peak-badge">Peak Hours</span></h3>
+        {# los charts se identifican con su nombre, se crean en la sección de js y se "traen" al html #}
+        <canvas id="startupChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Avg Navigation Latency by Device <span class="peak-badge">Peak Hours</span></h3>
+        <canvas id="navChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Startup Time Trend (Last 10 Days) <span class="peak-badge">Peak Hours: Weekdays 8AM-5PM</span></h3>
+        <canvas id="trendChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Navigation Latency Trend (Last 10 Days) <span class="peak-badge">Peak Hours: Weekdays 8AM-5PM</span></h3>
+        <canvas id="navTrendChart"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    createBarChart('startupChart', {{ startup_labels|safe }}, {{ startup_values|safe }}, 'Avg Startup (ms)');
+    createBarChart('navChart', {{ nav_labels|safe }}, {{ nav_values|safe }}, 'Avg Navigation (ms)');
+    createLineChart('trendChart', {{ daily_startup_labels|safe }}, {{ daily_startup_values|safe }}, 'Avg Startup (ms)', '#4f46e5');
+    createLineChart('navTrendChart', {{ daily_nav_labels|safe }}, {{ daily_nav_values|safe }}, 'Avg Navigation (ms)', '#0891b2');
+</script>
+{% endblock %}
