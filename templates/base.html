@@ -1,0 +1,37 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Analytics Dashboard{% endblock %}</title>
+    {#Importar el css de dashboardn #}
+    <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+    {#Esta es la definicion de chart que se utiliza para graficar los BQ :) #}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+<div class="header">
+    <h1>Performance Analytics Dashboard</h1>
+    <p>Mobile app analytics across Kotlin & Flutter platforms</p>
+</div>
+
+<nav class="nav-tabs">
+    {% block nav_tabs %}
+        <a href="{% url 'bq1-dashboard' %}" class="{% block nav_bq1 %}{% endblock %}">BQ1: Startup & Latency</a>
+        {# Aqui se ponen las nuevas dashboards, todas extienden a base para tener el nav disponibleee, como: #}
+        {# <a href="{% url 'bq2-dashboard' %}" class="{% block nav_bq2 %}{% endblock %}">BQ2: Business Question 2 titulo</a>#}
+    {% endblock %}
+</nav>
+
+{# Aqui iria el contenido, tipo las charts y eso #}
+<div class="container">
+    {% block content %}{% endblock %}
+</div>
+
+{# Aqui va el javascript, como la definicion de las graficas y eso #}
+<script src="{% static 'js/charts.js' %}"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>
