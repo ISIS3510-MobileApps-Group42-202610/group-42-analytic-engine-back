@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
     'marketplace_analytics.apps.MarketplaceAnalyticsConfig',
 ]
 
@@ -149,3 +150,12 @@ STORAGES = {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
     },
 }
+
+
+# Analytics ingestion auth options (configure one or more in .env)
+ANALYTICS_INGEST_TOKEN = os.getenv('ANALYTICS_INGEST_TOKEN', '')
+ANALYTICS_API_KEY = os.getenv('ANALYTICS_API_KEY', '')
+ANALYTICS_JWT_SECRET = os.getenv('ANALYTICS_JWT_SECRET', '')
+ANALYTICS_JWT_ALGORITHM = os.getenv('ANALYTICS_JWT_ALGORITHM', 'HS256')
+ANALYTICS_JWT_AUDIENCE = os.getenv('ANALYTICS_JWT_AUDIENCE', '')
+ANALYTICS_JWT_ISSUER = os.getenv('ANALYTICS_JWT_ISSUER', '')

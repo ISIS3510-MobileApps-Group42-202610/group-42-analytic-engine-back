@@ -122,7 +122,130 @@ body {
     margin-left: 8px;
 }
 
+/* Q9 dashboard enhancements */
+.q9-bq-box {
+    background: linear-gradient(135deg, #ecfeff 0%, #f0fdf4 100%);
+    border-color: #0f766e;
+}
+
+.filter-panel {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.filter-form {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.filter-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.filter-item label {
+    font-size: 12px;
+    color: #4b5563;
+    font-weight: 600;
+}
+
+.filter-item select,
+.filter-item input {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 180px;
+    font-size: 13px;
+}
+
+.filter-actions button {
+    background: #0f766e;
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.filter-actions button:hover {
+    background: #115e59;
+}
+
+.period-chip {
+    background: #ecfeff;
+    color: #155e75;
+    border: 1px solid #bae6fd;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.hidden {
+    display: none;
+}
+
+.q9-cards .card {
+    position: relative;
+}
+
+.q9-cards .subline {
+    margin-top: 8px;
+    color: #6b7280;
+    font-size: 12px;
+}
+
+.highlight-card {
+    border: 2px solid #0f766e;
+    background: linear-gradient(135deg, #f0fdfa 0%, #ffffff 70%);
+}
+
+.q9-charts {
+    margin-top: 4px;
+}
+
+.methodology-box {
+    background: #fff;
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.methodology-box h3 {
+    font-size: 15px;
+    margin-bottom: 10px;
+    color: #0f172a;
+}
+
+.methodology-box ul {
+    padding-left: 18px;
+    color: #334155;
+}
+
+.methodology-box li {
+    margin-bottom: 8px;
+    line-height: 1.45;
+    font-size: 13px;
+}
+
 @media (max-width: 768px) {
     .charts { grid-template-columns: 1fr; }
     .nav-tabs { padding: 0 16px; }
+    .filter-item select,
+    .filter-item input {
+        min-width: 100%;
+    }
 }
