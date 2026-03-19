@@ -1,14 +1,32 @@
 import json
 from datetime import timedelta
+from datetime import timezone as dt_timezone
 
 from django.db.models import Avg, Count
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.http import JsonResponse
 from django.shortcuts import render
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError
 
 from marketplace_analytics.models import PerformanceEvent
+from marketplace_analytics.authentication import (
+    StaticTokenAuthentication,
+    ApiKeyAuthentication,
+    JWTIngestionAuthentication,
+)
+from marketplace_analytics.serializers import AnalyticsEventIngestSerializer
+from marketplace_analytics.services import (
+    ingest_business_event,
+    calculate_q9_messaging_impact_metric_with_filters,
+    resolve_reporting_window,
+)
 
 
 @csrf_exempt
@@ -194,3 +212,131 @@ def performance_summary_api(request):
         ],
     }
     return JsonResponse(data)
+
+
+def q9_dashboard(request):
+    """
+    Dashboard view for Q9 messaging impact metric with date filters.
+    """
+    period, start, end = _extract_period_params(request)
+    since, until, resolved_period = resolve_reporting_window(period=period, start=start, end=end)
+
+    report = calculate_q9_messaging_impact_metric_with_filters(
+        since=since,
+        until=until,
+        period_label=resolved_period,
+    )
+
+    with_group = report['group_with_messaging']
+    without_group = report['group_without_messaging']
+
+    with_rate = with_group['completion_rate'] if with_group['completion_rate'] is not None else 0
+    without_rate = without_group['completion_rate'] if without_group['completion_rate'] is not None else 0
+    absolute_difference = report['absolute_difference'] if report['absolute_difference'] is not None else 0
+    relative_lift = report['relative_lift_percentage'] if report['relative_lift_percentage'] is not None else 0
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    context = {
+        'selected_period': resolved_period,
+        'period_display': period_label_map.get(resolved_period, resolved_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+        'with_listings': with_group['listings'],
+        'without_listings': without_group['listings'],
+        'with_completed': with_group['completed'],
+        'without_completed': without_group['completed'],
+        'with_rate_pct': round(with_rate * 100, 2),
+        'without_rate_pct': round(without_rate * 100, 2),
+        'absolute_difference_pct': round(absolute_difference * 100, 2),
+        'relative_lift_pct': round(relative_lift, 2),
+        'completion_labels': ['With Messaging', 'Without Messaging'],
+        'completion_rates': [round(with_rate * 100, 2), round(without_rate * 100, 2)],
+    }
+    return render(request, 'bq9_dashboard.html', context)
+
+
+class BusinessEventIngestionAPIView(APIView):
+    """
+    Ingest business-relevant analytics events from Android/iOS clients.
+    """
+
+    authentication_classes = (
+        StaticTokenAuthentication,
+        ApiKeyAuthentication,
+        JWTIngestionAuthentication,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        serializer = AnalyticsEventIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        event = ingest_business_event(serializer.validated_data)
+
+        return Response(
+            {
+                'status': 'ok',
+                'event_id': event.id,
+                'event_name': event.event_name,
+                'listing_id': event.listing_id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class Q9MessagingImpactAPIView(APIView):
+    """
+    Return the Q9 metric: messaging impact on transaction completion.
+    """
+
+    def get(self, request):
+        period, start, end = _extract_period_params(request)
+
+        since, until, resolved_period = resolve_reporting_window(period=period, start=start, end=end)
+
+        data = calculate_q9_messaging_impact_metric_with_filters(
+            since=since,
+            until=until,
+            period_label=resolved_period,
+        )
+        return Response(data, status=status.HTTP_200_OK)
+
+
+def _extract_period_params(request):
+    params = getattr(request, 'query_params', request.GET)
+
+    period = (params.get('period') or 'all_time').strip()
+
+    if period not in {'all_time', 'last_30_days', 'semester_to_date', 'custom'}:
+        raise ValidationError('period must be one of: all_time, last_30_days, semester_to_date, custom')
+
+    start = None
+    end = None
+    if period == 'custom':
+        start_raw = params.get('start')
+        end_raw = params.get('end')
+
+        if not start_raw or not end_raw:
+            raise ValidationError('custom period requires start and end query params in ISO-8601 format.')
+
+        start = parse_datetime(start_raw)
+        end = parse_datetime(end_raw)
+
+        if not start or not end:
+            raise ValidationError('Invalid start/end datetime format. Use ISO-8601.')
+
+        if timezone.is_naive(start):
+            start = timezone.make_aware(start, timezone=dt_timezone.utc)
+        if timezone.is_naive(end):
+            end = timezone.make_aware(end, timezone=dt_timezone.utc)
+
+        if start > end:
+            raise ValidationError('start must be earlier than or equal to end.')
+
+    return period, start, end

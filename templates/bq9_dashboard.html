@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}BQ9: Messaging Impact - Analytics Dashboard{% endblock %}
+{% block nav_bq9 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box q9-bq-box">
+    <h3>Business Question (BQ9)</h3>
+    <p>
+        To what extent does the in-app messaging feature increase transaction completion compared to listings
+        with no buyer-seller interaction?
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="q9FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+            <select name="period" id="period">
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>All Time</option>
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>Last 30 Days</option>
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>Semester to Date</option>
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>Custom Range</option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFields">
+            <label for="start">Start</label>
+            <input type="datetime-local" name="start" id="start" value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFieldsEnd">
+            <label for="end">End</label>
+            <input type="datetime-local" name="end" id="end" value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">Current: {{ period_display }}</div>
+</div>
+
+<div class="cards q9-cards">
+    <div class="card highlight-card">
+        <div class="label">Completion Rate With Messaging</div>
+        <div class="value">{{ with_rate_pct }} <span class="unit">%</span></div>
+        <div class="subline">{{ with_completed }} / {{ with_listings }} listings completed</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Completion Rate Without Messaging</div>
+        <div class="value">{{ without_rate_pct }} <span class="unit">%</span></div>
+        <div class="subline">{{ without_completed }} / {{ without_listings }} listings completed</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Absolute Difference</div>
+        <div class="value">{{ absolute_difference_pct }} <span class="unit">pp</span></div>
+        <div class="subline">Percentage points</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Relative Lift</div>
+        <div class="value">{{ relative_lift_pct }} <span class="unit">%</span></div>
+        <div class="subline">Improvement vs no messaging</div>
+    </div>
+</div>
+
+<div class="charts q9-charts">
+    <div class="chart-box">
+        <h3>Completion Rate Comparison</h3>
+        <canvas id="q9CompletionRateChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Cohort Size Distribution</h3>
+        <canvas id="q9CohortSizeChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li>With messaging: listing has at least one first_message_sent event (buyer and seller present).</li>
+        <li>Without messaging: listing has no first_message_sent in the selected period.</li>
+        <li>Completed: listing final state has transaction_completed in backend truth table.</li>
+    </ul>
+</div>
+
+{{ completion_labels|json_script:"q9-completion-labels" }}
+{{ completion_rates|json_script:"q9-completion-rates" }}
+{{ with_listings|json_script:"q9-with-listings" }}
+{{ without_listings|json_script:"q9-without-listings" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const completionLabels = JSON.parse(document.getElementById('q9-completion-labels').textContent);
+    const completionRates = JSON.parse(document.getElementById('q9-completion-rates').textContent);
+    const withListings = JSON.parse(document.getElementById('q9-with-listings').textContent);
+    const withoutListings = JSON.parse(document.getElementById('q9-without-listings').textContent);
+
+    createComparisonBarChart(
+        'q9CompletionRateChart',
+        completionLabels,
+        completionRates
+    );
+
+    createDonutChart(
+        'q9CohortSizeChart',
+        ['With Messaging', 'Without Messaging'],
+        [withListings, withoutListings]
+    );
+
+    const periodSelect = document.getElementById('period');
+    const customStart = document.getElementById('customRangeFields');
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    periodSelect.addEventListener('change', function () {
+        const show = this.value === 'custom';
+        customStart.classList.toggle('hidden', !show);
+        customEnd.classList.toggle('hidden', !show);
+    });
+</script>
+{% endblock %}

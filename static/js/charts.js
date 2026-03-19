@@ -46,3 +46,59 @@ function createLineChart(canvasId, labels, data, label, color) {
         }
     });
 }
+
+function createComparisonBarChart(canvasId, labels, data) {
+    new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Completion Rate (%)',
+                data: data,
+                backgroundColor: ['#0f766e', '#b45309'],
+                borderRadius: 8,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {display: false},
+                tooltip: {
+                    callbacks: {
+                        label: function (ctx) {
+                            return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    title: {display: true, text: 'Completion Rate (%)'}
+                }
+            }
+        }
+    });
+}
+
+function createDonutChart(canvasId, labels, data) {
+    new Chart(document.getElementById(canvasId), {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: data,
+                backgroundColor: ['#0f766e', '#b45309'],
+                borderWidth: 1,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {position: 'bottom'},
+            },
+            cutout: '62%'
+        }
+    });
+}
