@@ -27,12 +27,12 @@ def post_performance_event(request):
     :return: JSON con status del resultado
     """
     if request.method != 'POST':
-        return JsonResponse({'error': 'POST required'}, status=405)
+        return JsonResponse({'status': 'POST required'}, status=405)
 
     try:
         data = json.loads(request.body)
     except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+        return JsonResponse({'status': 'Invalid JSON'}, status=400)
 
     PerformanceEvent.objects.create(
         event_type=data['event_type'],  # "app_startup" or "screen_navigation"
@@ -61,7 +61,7 @@ def get_peak_events(days=10):
     )
 
 
-def bq1_dashboard(request):
+def bq2_dashboard(request):
     """
     El view principal del dashboard para la BQ1
     :param request: un request HTTP
@@ -143,7 +143,7 @@ def bq1_dashboard(request):
     }
 
     # se renderiza con las graficas y eso bonito para el analytics persona
-    return render(request, 'bq1_dashboard.html', context)
+    return render(request, 'bq2_dashboard.html', context)
 
 
 def performance_summary_api(request):
