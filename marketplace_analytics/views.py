@@ -2,8 +2,8 @@ import json
 from datetime import timedelta
 from datetime import timezone as dt_timezone
 
-from django.db.models import Avg, Count
-from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
+from django.db.models import Avg, Count, Case, When, Value, CharField, F
+from django.db.models.functions import TruncDate
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils.dateparse import parse_datetime
@@ -79,6 +79,14 @@ def get_peak_events(days=10):
         # No incluye sabados y domingos por obvias razones xd
         .exclude(timestamp__week_day__in=[1, 7])
         .filter(timestamp__hour__gte=8, timestamp__hour__lt=17)
+        .annotate(
+            device_model_display=Case(
+                When(device_model__isnull=True, then=Value("Other (Chrome, Desktop)")),
+                When(device_model__exact='', then=Value("Other (Chrome, Desktop)")),
+                default=F('device_model'),
+                output_field=CharField()
+            )
+        )
     )
 
 
@@ -95,7 +103,7 @@ def bq2_dashboard(request):
     startup_by_device = list(
         peak_events
         .filter(event_type='app_startup')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -104,7 +112,7 @@ def bq2_dashboard(request):
     nav_by_device = list(
         peak_events
         .filter(event_type='screen_navigation')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -130,12 +138,19 @@ def bq2_dashboard(request):
     )
 
     # ====== Queries para TODOS los eventos (sin filtro de peak hours) ======
-    all_events = PerformanceEvent.objects.filter(timestamp__gte=since)
+    all_events = PerformanceEvent.objects.filter(timestamp__gte=since).annotate(
+        device_model_display=Case(
+            When(device_model__isnull=True, then=Value("Other (Chrome, Desktop)")),
+            When(device_model__exact='', then=Value("Other (Chrome, Desktop)")),
+            default=F('device_model'),
+            output_field=CharField()
+        )
+    )
 
     all_startup_by_device = list(
         all_events
         .filter(event_type='app_startup')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -143,7 +158,7 @@ def bq2_dashboard(request):
     all_nav_by_device = list(
         all_events
         .filter(event_type='screen_navigation')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -178,8 +193,8 @@ def bq2_dashboard(request):
     # resumen
     total_events = all_events.count()
     peak_count = peak_events.count()
-    device_count = peak_events.values('device_model').distinct().count()
-    all_device_count = all_events.values('device_model').distinct().count()
+    device_count = peak_events.values('device_model_display').distinct().count()
+    all_device_count = all_events.values('device_model_display').distinct().count()
 
     overall_startup = (
         peak_events.filter(event_type='app_startup')
@@ -193,10 +208,10 @@ def bq2_dashboard(request):
     # todas las "variables" del contexto pueden ser directamente accedidas por el HTML c:
     context = {
         # Peak hours
-        'startup_labels': json.dumps([d['device_model'] for d in startup_by_device]),
+        'startup_labels': json.dumps([d['device_model_display'] for d in startup_by_device]),
         'startup_values': json.dumps([round(d['avg_ms'], 1) for d in startup_by_device]),
         'startup_counts': json.dumps([d['count'] for d in startup_by_device]),
-        'nav_labels': json.dumps([d['device_model'] for d in nav_by_device]),
+        'nav_labels': json.dumps([d['device_model_display'] for d in nav_by_device]),
         'nav_values': json.dumps([round(d['avg_ms'], 1) for d in nav_by_device]),
         'nav_counts': json.dumps([d['count'] for d in nav_by_device]),
         'daily_startup_labels': json.dumps([d['date'].strftime('%b %d') for d in daily_startup]),
@@ -204,9 +219,9 @@ def bq2_dashboard(request):
         'daily_nav_labels': json.dumps([d['date'].strftime('%b %d') for d in daily_nav]),
         'daily_nav_values': json.dumps([round(d['avg_ms'], 1) for d in daily_nav]),
         # All hours
-        'all_startup_labels': json.dumps([d['device_model'] for d in all_startup_by_device]),
+        'all_startup_labels': json.dumps([d['device_model_display'] for d in all_startup_by_device]),
         'all_startup_values': json.dumps([round(d['avg_ms'], 1) for d in all_startup_by_device]),
-        'all_nav_labels': json.dumps([d['device_model'] for d in all_nav_by_device]),
+        'all_nav_labels': json.dumps([d['device_model_display'] for d in all_nav_by_device]),
         'all_nav_values': json.dumps([round(d['avg_ms'], 1) for d in all_nav_by_device]),
         'all_daily_startup_labels': json.dumps([d['date'].strftime('%b %d') for d in all_daily_startup]),
         'all_daily_startup_values': json.dumps([round(d['avg_ms'], 1) for d in all_daily_startup]),
@@ -238,7 +253,7 @@ def performance_summary_api(request):
     startup_by_device = list(
         peak_events
         .filter(event_type='app_startup')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -246,7 +261,7 @@ def performance_summary_api(request):
     nav_by_device = list(
         peak_events
         .filter(event_type='screen_navigation')
-        .values('device_model')
+        .values('device_model_display')
         .annotate(avg_ms=Avg('duration_ms'), count=Count('id'))
         .order_by('avg_ms')
     )
@@ -267,12 +282,12 @@ def performance_summary_api(request):
         'overall_avg_startup_ms': round(overall_startup, 1),
         'overall_avg_navigation_ms': round(overall_nav, 1),
         'startup_by_device': [
-            {'device_model': d['device_model'], 'avg_ms': round(
+            {'device_model': d['device_model_display'], 'avg_ms': round(
                 d['avg_ms'], 1), 'count': d['count']}
             for d in startup_by_device
         ],
         'navigation_by_device': [
-            {'device_model': d['device_model'], 'avg_ms': round(
+            {'device_model': d['device_model_display'], 'avg_ms': round(
                 d['avg_ms'], 1), 'count': d['count']}
             for d in nav_by_device
         ],
