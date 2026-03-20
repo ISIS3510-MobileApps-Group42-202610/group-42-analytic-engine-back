@@ -1,9 +1,10 @@
 import json
 from datetime import timedelta
 from datetime import timezone as dt_timezone
+from zoneinfo import ZoneInfo
 
 from django.db.models import Avg, Count, Case, When, Value, CharField, F
-from django.db.models.functions import TruncDate
+from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils.dateparse import parse_datetime
@@ -69,17 +70,19 @@ def post_performance_event(request):
 def get_peak_events(days=10):
     """
     Lógica para sacar los eventos en los últimos X días durante las horas pico (8am-5pm, lunes a viernes)
+    Usa la zona horaria de Bogotá (UTC-5)
     :param days:
     :return:
     """
     since = timezone.now() - timedelta(days=days)
+    bogota_tz = ZoneInfo('America/Bogota')
+    
     return (
         PerformanceEvent.objects
         .filter(timestamp__gte=since)
-        # No incluye sabados y domingos por obvias razones xd
-        .exclude(timestamp__week_day__in=[1, 7])
-        .filter(timestamp__hour__gte=8, timestamp__hour__lt=17)
         .annotate(
+            hour_bogota=ExtractHour('timestamp', tzinfo=bogota_tz),
+            weekday_bogota=ExtractWeekDay('timestamp', tzinfo=bogota_tz),
             device_model_display=Case(
                 When(device_model__isnull=True, then=Value("Other (Chrome, Desktop)")),
                 When(device_model__exact='', then=Value("Other (Chrome, Desktop)")),
@@ -87,6 +90,10 @@ def get_peak_events(days=10):
                 output_field=CharField()
             )
         )
+        # No incluye sabados y domingos por obvias razones xd (1=Sunday, 7=Saturday en Django)
+        .exclude(weekday_bogota__in=[1, 7])
+        # 8am-5pm Bogotá time
+        .filter(hour_bogota__gte=8, hour_bogota__lt=17)
     )
 
 
