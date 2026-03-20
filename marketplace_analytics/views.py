@@ -76,7 +76,8 @@ def get_peak_events(days=10):
     return (
         PerformanceEvent.objects
         .filter(timestamp__gte=since)
-        .exclude(timestamp__week_day__in=[1, 7])  # No incluye sabados y domingos por obvias razones xd
+        # No incluye sabados y domingos por obvias razones xd
+        .exclude(timestamp__week_day__in=[1, 7])
         .filter(timestamp__hour__gte=8, timestamp__hour__lt=17)
     )
 
@@ -181,12 +182,12 @@ def bq2_dashboard(request):
     all_device_count = all_events.values('device_model').distinct().count()
 
     overall_startup = (
-            peak_events.filter(event_type='app_startup')
-            .aggregate(avg=Avg('duration_ms'))['avg'] or 0
+        peak_events.filter(event_type='app_startup')
+        .aggregate(avg=Avg('duration_ms'))['avg'] or 0
     )
     overall_nav = (
-            peak_events.filter(event_type='screen_navigation')
-            .aggregate(avg=Avg('duration_ms'))['avg'] or 0
+        peak_events.filter(event_type='screen_navigation')
+        .aggregate(avg=Avg('duration_ms'))['avg'] or 0
     )
 
     # todas las "variables" del contexto pueden ser directamente accedidas por el HTML c:
@@ -251,25 +252,28 @@ def performance_summary_api(request):
     )
 
     overall_startup = (
-            peak_events.filter(event_type='app_startup')
-            .aggregate(avg=Avg('duration_ms'))['avg'] or 0
+        peak_events.filter(event_type='app_startup')
+        .aggregate(avg=Avg('duration_ms'))['avg'] or 0
     )
     overall_nav = (
-            peak_events.filter(event_type='screen_navigation')
-            .aggregate(avg=Avg('duration_ms'))['avg'] or 0
+        peak_events.filter(event_type='screen_navigation')
+        .aggregate(avg=Avg('duration_ms'))['avg'] or 0
     )
 
     data = {
-        'peak_hours': 'Weekdays 8AM-5PM', # Esto puede cambiar, depende de lo que digan las estadisticas xd
+        # Esto puede cambiar, depende de lo que digan las estadisticas xd
+        'peak_hours': 'Weekdays 8AM-5PM',
         'period': 'Last 10 days',
         'overall_avg_startup_ms': round(overall_startup, 1),
         'overall_avg_navigation_ms': round(overall_nav, 1),
         'startup_by_device': [
-            {'device_model': d['device_model'], 'avg_ms': round(d['avg_ms'], 1), 'count': d['count']}
+            {'device_model': d['device_model'], 'avg_ms': round(
+                d['avg_ms'], 1), 'count': d['count']}
             for d in startup_by_device
         ],
         'navigation_by_device': [
-            {'device_model': d['device_model'], 'avg_ms': round(d['avg_ms'], 1), 'count': d['count']}
+            {'device_model': d['device_model'], 'avg_ms': round(
+                d['avg_ms'], 1), 'count': d['count']}
             for d in nav_by_device
         ],
     }
@@ -281,7 +285,8 @@ def q9_dashboard(request):
     Dashboard view for Q9 messaging impact metric with date filters.
     """
     period, start, end = _extract_period_params(request)
-    since, until, resolved_period = resolve_reporting_window(period=period, start=start, end=end)
+    since, until, resolved_period = resolve_reporting_window(
+        period=period, start=start, end=end)
 
     report = calculate_q9_messaging_impact_metric_with_filters(
         since=since,
@@ -323,6 +328,87 @@ def q9_dashboard(request):
     return render(request, 'bq9_dashboard.html', context)
 
 
+def bq11_dashboard(request):
+    """
+    Dashboard for BQ11: which product categories and brands have the highest
+    transaction volume per academic semester.
+    """
+    from marketplace_analytics.models import AnalyticsEvent
+
+    events_qs = AnalyticsEvent.objects.filter(
+        event_name=AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        metadata__category__isnull=False,
+    ).exclude(metadata__category='unknown')
+
+    all_events_list = list(events_qs.values('metadata', 'occurred_at'))
+
+    category_counts = {}
+    category_revenue = {}
+    semester_category = {}
+    product_counts = {}
+
+    for e in all_events_list:
+        meta = e.get('metadata') or {}
+        category = meta.get('category', 'unknown')
+        product = meta.get('product', 'unknown')
+        price = meta.get('selling_price', 0) or 0
+        occurred = e.get('occurred_at')
+
+        semester = meta.get('semester')
+        if not semester and occurred:
+            year = occurred.year
+            half = 'A' if occurred.month <= 6 else 'B'
+            semester = f'{year}-{half}'
+
+        category_counts[category] = category_counts.get(category, 0) + 1
+        category_revenue[category] = category_revenue.get(
+            category, 0) + float(price)
+        product_counts[product] = product_counts.get(product, 0) + 1
+
+        if semester not in semester_category:
+            semester_category[semester] = {}
+        semester_category[semester][category] = semester_category[semester].get(
+            category, 0) + 1
+
+    sorted_categories = sorted(category_counts.items(), key=lambda x: -x[1])
+    top_categories = sorted_categories[:10]
+
+    sorted_products = sorted(product_counts.items(), key=lambda x: -x[1])
+    top_products = sorted_products[:10]
+
+    sorted_semesters = sorted(semester_category.keys())
+
+    all_categories = [c for c, _ in top_categories]
+    semester_datasets = {}
+    for cat in all_categories:
+        semester_datasets[cat] = [
+            semester_category.get(sem, {}).get(cat, 0)
+            for sem in sorted_semesters
+        ]
+
+    total_transactions = sum(category_counts.values())
+    total_revenue = sum(category_revenue.values())
+
+    context = {
+        'total_transactions': total_transactions,
+        'total_revenue': round(total_revenue, 2),
+        'unique_categories': len(category_counts),
+        'unique_products': len(product_counts),
+        'category_labels':  [c for c, _ in top_categories],
+        'category_counts':  [n for _, n in top_categories],
+        'category_revenue': [round(category_revenue.get(c, 0), 2) for c, _ in top_categories],
+        'product_labels':   [p for p, _ in top_products],
+        'product_counts':   [n for _, n in top_products],
+        'semester_labels':  sorted_semesters,
+        'semester_datasets': [
+            {'label': cat, 'data': semester_datasets[cat]}
+            for cat in all_categories
+        ],
+    }
+
+    return render(request, 'bq11_dashboard.html', context)
+
+
 class BusinessEventIngestionAPIView(APIView):
     """
     Ingest business-relevant analytics events from Android/iOS clients.
@@ -360,7 +446,8 @@ class Q9MessagingImpactAPIView(APIView):
     def get(self, request):
         period, start, end = _extract_period_params(request)
 
-        since, until, resolved_period = resolve_reporting_window(period=period, start=start, end=end)
+        since, until, resolved_period = resolve_reporting_window(
+            period=period, start=start, end=end)
 
         data = calculate_q9_messaging_impact_metric_with_filters(
             since=since,
@@ -376,7 +463,8 @@ def _extract_period_params(request):
     period = (params.get('period') or 'all_time').strip()
 
     if period not in {'all_time', 'last_30_days', 'semester_to_date', 'custom'}:
-        raise ValidationError('period must be one of: all_time, last_30_days, semester_to_date, custom')
+        raise ValidationError(
+            'period must be one of: all_time, last_30_days, semester_to_date, custom')
 
     start = None
     end = None
@@ -385,13 +473,15 @@ def _extract_period_params(request):
         end_raw = params.get('end')
 
         if not start_raw or not end_raw:
-            raise ValidationError('custom period requires start and end query params in ISO-8601 format.')
+            raise ValidationError(
+                'custom period requires start and end query params in ISO-8601 format.')
 
         start = parse_datetime(start_raw)
         end = parse_datetime(end_raw)
 
         if not start or not end:
-            raise ValidationError('Invalid start/end datetime format. Use ISO-8601.')
+            raise ValidationError(
+                'Invalid start/end datetime format. Use ISO-8601.')
 
         if timezone.is_naive(start):
             start = timezone.make_aware(start, timezone=dt_timezone.utc)
@@ -399,7 +489,8 @@ def _extract_period_params(request):
             end = timezone.make_aware(end, timezone=dt_timezone.utc)
 
         if start > end:
-            raise ValidationError('start must be earlier than or equal to end.')
+            raise ValidationError(
+                'start must be earlier than or equal to end.')
 
     return period, start, end
 

@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}BQ11: Category & Brand Transaction Volume - Analytics Dashboard{% endblock %}
+{% block nav_bq11 %}active{% endblock %}
+
+{% block content %}
+
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question (BQ11 – Type 4)</h3>
+        <p>
+            Which brands and product categories have the highest transaction volume per academic semester?
+            Measured using aggregated transaction data segmented by category, product, and semester period.
+        </p>
+    </div>
+</div>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Total Transactions</div>
+        <div class="value">{{ total_transactions }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Total Revenue</div>
+        <div class="value">${{ total_revenue }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Categories Tracked</div>
+        <div class="value">{{ unique_categories }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Unique Products</div>
+        <div class="value">{{ unique_products }}</div>
+    </div>
+</div>
+
+{% if total_transactions == 0 %}
+<div class="methodology-box">
+    <h3>No BQ11 data available yet</h3>
+    <ul>
+        <li>The dashboard is working correctly.</li>
+        <li>No <code>transaction_completed</code> events with category metadata have been recorded yet.</li>
+        <li>Run <code>python manage.py seed_bq11_data</code> to populate with sample data.</li>
+        <li>Or trigger transactions from the Android app — the <code>trackTransactionCompleted</code> event now includes <code>category</code>, <code>product</code>, and <code>semester</code> fields.</li>
+    </ul>
+</div>
+{% else %}
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Top Categories by Transaction Count</h3>
+        <canvas id="categoryCountChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Top Categories by Revenue ($)</h3>
+        <canvas id="categoryRevenueChart"></canvas>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box full">
+        <h3>Top 10 Products by Transaction Count</h3>
+        <canvas id="productChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li><strong>Category / Product:</strong> extracted from the <code>metadata.category</code> and <code>metadata.product</code> fields of each <code>transaction_completed</code> event.</li>
+        <li><strong>Semester:</strong> derived from <code>metadata.semester</code> (e.g. <code>2025-A</code> for Jan–Jun, <code>2025-B</code> for Jul–Dec).</li>
+        <li><strong>Revenue:</strong> sum of <code>metadata.selling_price</code> across all completed transactions per category.</li>
+        <li><strong>Stacked bar:</strong> shows how each category contributes to overall volume in each academic semester.</li>
+    </ul>
+</div>
+
+{{ category_labels|json_script:"bq11-category-labels" }}
+{{ category_counts|json_script:"bq11-category-counts" }}
+{{ category_revenue|json_script:"bq11-category-revenue" }}
+{{ product_labels|json_script:"bq11-product-labels" }}
+{{ product_counts|json_script:"bq11-product-counts" }}
+{{ semester_labels|json_script:"bq11-semester-labels" }}
+{{ semester_datasets|json_script:"bq11-semester-datasets" }}
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if total_transactions > 0 %}
+<script>
+    const categoryLabels   = JSON.parse(document.getElementById('bq11-category-labels').textContent);
+    const categoryCounts   = JSON.parse(document.getElementById('bq11-category-counts').textContent);
+    const categoryRevenue  = JSON.parse(document.getElementById('bq11-category-revenue').textContent);
+    const productLabels    = JSON.parse(document.getElementById('bq11-product-labels').textContent);
+    const productCounts    = JSON.parse(document.getElementById('bq11-product-counts').textContent);
+    const semesterLabels   = JSON.parse(document.getElementById('bq11-semester-labels').textContent);
+    const semesterDatasets = JSON.parse(document.getElementById('bq11-semester-datasets').textContent);
+
+    const ticksConfig = {
+        maxRotation: 45,
+        minRotation: 45,
+        font: { size: 11 }
+    };
+
+    // Top categories by count
+    new Chart(document.getElementById('categoryCountChart'), {
+        type: 'bar',
+        data: {
+            labels: categoryLabels,
+            datasets: [{
+                label: 'Transactions',
+                data: categoryCounts,
+                backgroundColor: PALETTE,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: ticksConfig },
+                y: { beginAtZero: true, title: { display: true, text: 'Transactions' } }
+            }
+        }
+    });
+
+    // Top categories by revenue
+    new Chart(document.getElementById('categoryRevenueChart'), {
+        type: 'bar',
+        data: {
+            labels: categoryLabels,
+            datasets: [{
+                label: 'Revenue ($)',
+                data: categoryRevenue,
+                backgroundColor: PALETTE,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: ticksConfig },
+                y: { beginAtZero: true, title: { display: true, text: '$' } }
+            }
+        }
+    });
+
+    // Top products
+    new Chart(document.getElementById('productChart'), {
+        type: 'bar',
+        data: {
+            labels: productLabels,
+            datasets: [{
+                label: 'Transactions',
+                data: productCounts,
+                backgroundColor: PALETTE,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: ticksConfig },
+                y: { beginAtZero: true, title: { display: true, text: 'Transactions' } }
+            }
+        }
+    });
+
+    // Semester stacked bar
+    const coloredDatasets = semesterDatasets.map((ds, i) => ({
+        ...ds,
+        backgroundColor: PALETTE[i % PALETTE.length],
+        stack: 'semester',
+        borderRadius: 4,
+    }));
+
+    new Chart(document.getElementById('semesterChart'), {
+        type: 'bar',
+        data: {
+            labels: semesterLabels,
+            datasets: coloredDatasets,
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom' } },
+            scales: {
+                x: { stacked: true, ticks: ticksConfig },
+                y: { stacked: true, beginAtZero: true, title: { display: true, text: 'Transactions' } }
+            }
+        }
+    });
+</script>
+{% endif %}
+{% endblock %}
