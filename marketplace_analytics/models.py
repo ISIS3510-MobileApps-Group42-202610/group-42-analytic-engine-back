@@ -23,8 +23,8 @@ class PerformanceEvent(models.Model):
     class Meta:
         ordering = ['-timestamp']
         indexes = [
-            models.Index(fields=['event_type', 'timestamp']),
-            models.Index(fields=['device_model']),
+            models.Index(fields=['event_type', 'timestamp'], name='bq2_event_time_idx'),
+            models.Index(fields=['device_model'], name='bq2_device_idx'),
         ]
 
     def __str__(self):
@@ -60,8 +60,14 @@ class AnalyticsEvent(models.Model):
     class Meta:
         ordering = ['-occurred_at', '-id']
         indexes = [
-            models.Index(fields=['listing_id', 'event_name', 'occurred_at']),
-            models.Index(fields=['event_name', 'occurred_at']),
+            models.Index(
+                fields=['listing_id', 'event_name', 'occurred_at'],
+                name='bq9_listing_event_occ_idx',
+            ),
+            models.Index(
+                fields=['event_name', 'occurred_at'],
+                name='bq9_event_occ_idx',
+            ),
         ]
         constraints = [
             models.CheckConstraint(
@@ -96,6 +102,74 @@ class ListingAnalyticsState(models.Model):
     class Meta:
         ordering = ['listing_id']
         indexes = [
-            models.Index(fields=['has_messaging_interaction', 'is_transaction_completed']),
-            models.Index(fields=['updated_at']),
+            models.Index(
+                fields=['has_messaging_interaction', 'is_transaction_completed'],
+                name='bq9_msg_txn_idx',
+            ),
+            models.Index(
+                fields=['updated_at'],
+                name='bq9_updated_idx',
+            ),
         ]
+
+
+class SearchDiscoveryEvent(models.Model):
+    class EventName(models.TextChoices):
+        SEARCH_STARTED = 'search_started', 'Search Started'
+        FILTER_APPLIED = 'filter_applied', 'Filter Applied'
+        LISTING_OPENED = 'listing_opened', 'Listing Opened'
+        MESSAGE_SENT = 'message_sent', 'Message Sent'
+        RESERVATION_CREATED = 'reservation_created', 'Reservation Created'
+
+    class FilterType(models.TextChoices):
+        COURSE = 'course', 'Course'
+        CATEGORY = 'category', 'Category'
+        BOTH = 'both', 'Both'
+        NONE = 'none', 'None'
+
+    session_id = models.CharField(max_length=64, db_index=True)
+    user_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+
+    event_name = models.CharField(
+        max_length=32,
+        choices=EventName.choices,
+        db_index=True,
+    )
+
+    listing_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+
+    selected_course_id = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    selected_course_name = models.CharField(max_length=255, null=True, blank=True)
+
+    selected_category_id = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    selected_category_name = models.CharField(max_length=255, null=True, blank=True)
+
+    selected_filter_type = models.CharField(
+        max_length=20,
+        choices=FilterType.choices,
+        default=FilterType.NONE,
+        db_index=True,
+    )
+
+    search_query = models.CharField(max_length=255, null=True, blank=True)
+    platform = models.CharField(max_length=20, blank=True, default='ios')
+    app_version = models.CharField(max_length=40, blank=True, default='')
+
+    occurred_at = models.DateTimeField(db_index=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    metadata = models.JSONField(default=dict, blank=True)
+    client_event_id = models.CharField(max_length=64, null=True, blank=True, unique=True)
+
+    class Meta:
+        ordering = ['-occurred_at', '-id']
+        indexes = [
+            models.Index(fields=['session_id', 'occurred_at'], name='bq3_session_occ_idx'),
+            models.Index(fields=['event_name', 'occurred_at'], name='bq3_event_occ_idx'),
+            models.Index(fields=['selected_filter_type', 'occurred_at'], name='bq3_filter_occ_idx'),
+            models.Index(fields=['selected_course_id'], name='bq3_course_idx'),
+            models.Index(fields=['selected_category_id'], name='bq3_category_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.session_id} - {self.event_name} - {self.occurred_at.isoformat()}'

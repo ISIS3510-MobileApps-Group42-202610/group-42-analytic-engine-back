@@ -3,8 +3,10 @@ from datetime import datetime
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
+from collections import defaultdict
+from statistics import median
 
-from marketplace_analytics.models import AnalyticsEvent, ListingAnalyticsState
+from marketplace_analytics.models import AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent
 
 
 MESSAGING_EVENTS = {
@@ -190,3 +192,218 @@ def _semester_start_for(reference_dt):
     if month <= 6:
         return reference_dt.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     return reference_dt.replace(month=7, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+BQ3_START_EVENTS = {
+    SearchDiscoveryEvent.EventName.SEARCH_STARTED,
+    SearchDiscoveryEvent.EventName.FILTER_APPLIED,
+}
+
+BQ3_INTERACTION_EVENTS = {
+    SearchDiscoveryEvent.EventName.LISTING_OPENED,
+    SearchDiscoveryEvent.EventName.MESSAGE_SENT,
+    SearchDiscoveryEvent.EventName.RESERVATION_CREATED,
+}
+
+
+def ingest_search_discovery_event(validated_event_data):
+    return SearchDiscoveryEvent.objects.create(**validated_event_data)
+
+
+def calculate_bq3_search_to_interaction_metric(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    period_label: str = 'all_time',
+):
+    events = SearchDiscoveryEvent.objects.all()
+
+    if since is not None:
+        events = events.filter(occurred_at__gte=since)
+    if until is not None:
+        events = events.filter(occurred_at__lte=until)
+
+    events = events.order_by('session_id', 'occurred_at', 'id')
+
+    sessions = {}
+
+    for event in events.iterator():
+        session = sessions.setdefault(
+            event.session_id,
+            {
+                'session_id': event.session_id,
+                'user_id': event.user_id,
+                'first_action_at': None,
+                'first_action_name': None,
+                'first_interaction_at': None,
+                'first_interaction_name': None,
+                'selected_filter_type': SearchDiscoveryEvent.FilterType.NONE,
+                'selected_course_id': None,
+                'selected_course_name': None,
+                'selected_category_id': None,
+                'selected_category_name': None,
+                'search_query': None,
+            }
+        )
+
+        if event.event_name in BQ3_START_EVENTS and session['first_action_at'] is None:
+            session['first_action_at'] = event.occurred_at
+            session['first_action_name'] = event.event_name
+            session['selected_filter_type'] = _resolve_filter_type(event)
+            session['selected_course_id'] = event.selected_course_id
+            session['selected_course_name'] = event.selected_course_name
+            session['selected_category_id'] = event.selected_category_id
+            session['selected_category_name'] = event.selected_category_name
+            session['search_query'] = event.search_query
+
+        if (
+            event.event_name in BQ3_INTERACTION_EVENTS
+            and session['first_action_at'] is not None
+            and event.occurred_at >= session['first_action_at']
+            and session['first_interaction_at'] is None
+        ):
+            session['first_interaction_at'] = event.occurred_at
+            session['first_interaction_name'] = event.event_name
+
+    started_sessions = [
+        s for s in sessions.values()
+        if s['first_action_at'] is not None
+    ]
+
+    completed_sessions = []
+    elapsed_seconds = []
+
+    breakdown = defaultdict(lambda: {
+        'sessions_started': 0,
+        'sessions_with_interaction': 0,
+        'avg_seconds_to_interaction': None,
+        'median_seconds_to_interaction': None,
+    })
+
+    interaction_breakdown = defaultdict(int)
+
+    for session in started_sessions:
+        filter_key = session['selected_filter_type'] or SearchDiscoveryEvent.FilterType.NONE
+        breakdown[filter_key]['sessions_started'] += 1
+
+        if session['first_interaction_at'] is not None:
+            delta_seconds = (
+                session['first_interaction_at'] - session['first_action_at']
+            ).total_seconds()
+
+            completed_sessions.append({
+                **session,
+                'seconds_to_first_interaction': delta_seconds,
+            })
+            elapsed_seconds.append(delta_seconds)
+
+            breakdown[filter_key]['sessions_with_interaction'] += 1
+            interaction_breakdown[session['first_interaction_name']] += 1
+
+    for filter_key, data in breakdown.items():
+        filter_elapsed = [
+            s['seconds_to_first_interaction']
+            for s in completed_sessions
+            if (s['selected_filter_type'] or SearchDiscoveryEvent.FilterType.NONE) == filter_key
+        ]
+        data['avg_seconds_to_interaction'] = _safe_avg(filter_elapsed)
+        data['median_seconds_to_interaction'] = _safe_median(filter_elapsed)
+        data['interaction_rate'] = (
+            data['sessions_with_interaction'] / data['sessions_started']
+            if data['sessions_started'] else None
+        )
+
+    return {
+        'period': {
+            'label': period_label,
+            'since': since,
+            'until': until,
+        },
+        'metric_definition': (
+            'Time elapsed between the first search/filter event and the first '
+            'meaningful interaction in the same session.'
+        ),
+        'meaningful_interactions': [
+            SearchDiscoveryEvent.EventName.LISTING_OPENED,
+            SearchDiscoveryEvent.EventName.MESSAGE_SENT,
+            SearchDiscoveryEvent.EventName.RESERVATION_CREATED,
+        ],
+        'search_sessions_started': len(started_sessions),
+        'search_sessions_with_meaningful_interaction': len(completed_sessions),
+        'interaction_rate': (
+            len(completed_sessions) / len(started_sessions)
+            if started_sessions else None
+        ),
+        'avg_seconds_to_first_interaction': _safe_avg(elapsed_seconds),
+        'median_seconds_to_first_interaction': _safe_median(elapsed_seconds),
+        'p90_seconds_to_first_interaction': _percentile(elapsed_seconds, 90),
+        'distribution_buckets': _build_distribution_buckets(elapsed_seconds),
+        'by_filter_type': breakdown,
+        'by_interaction_type': dict(interaction_breakdown),
+        'sample_completed_sessions': completed_sessions[:20],
+    }
+
+
+def _resolve_filter_type(event: SearchDiscoveryEvent) -> str:
+    if event.selected_filter_type and event.selected_filter_type != SearchDiscoveryEvent.FilterType.NONE:
+        return event.selected_filter_type
+
+    has_course = bool(event.selected_course_id)
+    has_category = bool(event.selected_category_id)
+
+    if has_course and has_category:
+        return SearchDiscoveryEvent.FilterType.BOTH
+    if has_course:
+        return SearchDiscoveryEvent.FilterType.COURSE
+    if has_category:
+        return SearchDiscoveryEvent.FilterType.CATEGORY
+    return SearchDiscoveryEvent.FilterType.NONE
+
+
+def _safe_avg(values):
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _safe_median(values):
+    if not values:
+        return None
+    return median(values)
+
+
+def _percentile(values, percentile_rank):
+    if not values:
+        return None
+
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+
+    k = (len(ordered) - 1) * (percentile_rank / 100)
+    lower = int(k)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = k - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def _build_distribution_buckets(values):
+    buckets = {
+        '0-10s': 0,
+        '10-30s': 0,
+        '30-60s': 0,
+        '60-180s': 0,
+        '180s+': 0,
+    }
+
+    for value in values:
+        if value < 10:
+            buckets['0-10s'] += 1
+        elif value < 30:
+            buckets['10-30s'] += 1
+        elif value < 60:
+            buckets['30-60s'] += 1
+        elif value < 180:
+            buckets['60-180s'] += 1
+        else:
+            buckets['180s+'] += 1
+
+    return buckets

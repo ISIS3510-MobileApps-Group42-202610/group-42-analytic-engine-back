@@ -21,6 +21,7 @@
     {% block nav_tabs %}
         <a href="{% url 'bq2-dashboard' %}" class="{% block nav_bq1 %}{% endblock %}">BQ2: Startup & Latency</a>
         <a href="{% url 'bq9-dashboard' %}" class="{% block nav_bq9 %}{% endblock %}">BQ9: Messaging Impact</a>
+        <a href="{% url 'bq3-dashboard' %}" class="{% block nav_bq3 %}{% endblock %}">BQ3: Search to Interaction</a>
         {# Aqui se ponen las nuevas dashboards, todas extienden a base para tener el nav disponibleee, como: #}
         {# <a href="{% url 'bq2-dashboard' %}" class="{% block nav_bq2 %}{% endblock %}">BQ2: Business Question 2 titulo</a>#}
     {% endblock %}

@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+
+{% block title %}BQ3: Search to Interaction - Analytics Dashboard{% endblock %}
+{% block nav_bq3 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ Type 2)</h3>
+    <p>
+        How often and how quickly can users find and interact with listings that match
+        their selected course or category filters?
+    </p>
+    <p style="margin-top: 8px;">
+        Measured by the time elapsed between the first search/filter action and the first meaningful interaction
+        (listing open, message sent, or reservation).
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq3FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+            <select name="period" id="period">
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>All Time</option>
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>Last 30 Days</option>
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>Semester to Date</option>
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>Custom Range</option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFields">
+            <label for="start">Start</label>
+            <input type="datetime-local" name="start" id="start" value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFieldsEnd">
+            <label for="end">End</label>
+            <input type="datetime-local" name="end" id="end" value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">Current: {{ period_display }}</div>
+</div>
+
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Search Sessions Started</div>
+        <div class="value">{{ search_sessions_started }}</div>
+        <div class="subline">Sessions with search or filter activity</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Sessions With Interaction</div>
+        <div class="value">{{ search_sessions_with_meaningful_interaction }}</div>
+        <div class="subline">Reached listing open, message, or reservation</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Interaction Rate</div>
+        <div class="value">{{ interaction_rate }} <span class="unit">%</span></div>
+        <div class="subline">Completed search-to-interaction journeys</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Avg Time to First Interaction</div>
+        <div class="value">{{ avg_seconds_to_first_interaction }} <span class="unit">s</span></div>
+        <div class="subline">Average elapsed time per completed session</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Median Time</div>
+        <div class="value">{{ median_seconds_to_first_interaction }} <span class="unit">s</span></div>
+        <div class="subline">Median elapsed time</div>
+    </div>
+
+    <div class="card">
+        <div class="label">P90 Time</div>
+        <div class="value">{{ p90_seconds_to_first_interaction }} <span class="unit">s</span></div>
+        <div class="subline">90th percentile time to interaction</div>
+    </div>
+</div>
+
+{% if search_sessions_started == 0 %}
+<div class="methodology-box">
+    <h3>No BQ3 data available yet</h3>
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+        <li>There are no search/filter interaction events stored yet for the selected period.</li>
+        <li>You need to send events to <strong>/api/bq3/events/</strong> from the iOS app so charts can populate.</li>
+    </ul>
+</div>
+{% else %}
+<div class="charts">
+    <div class="chart-box">
+        <h3>Interaction Rate by Filter Type</h3>
+        <canvas id="bq3RateByFilterChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Average Time by Filter Type</h3>
+        <canvas id="bq3AvgTimeByFilterChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Time Distribution to First Interaction</h3>
+        <canvas id="bq3DistributionChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>First Meaningful Interaction Type</h3>
+        <canvas id="bq3InteractionTypeChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li>Session started: first <code>search_started</code> or <code>filter_applied</code> event in a session.</li>
+        <li>Meaningful interaction: <code>listing_opened</code>, <code>message_sent</code>, or <code>reservation_created</code>.</li>
+        <li>Interaction rate: percentage of started sessions that reached at least one meaningful interaction.</li>
+        <li>Elapsed time: difference between first search/filter event and first meaningful interaction in the same session.</li>
+    </ul>
+</div>
+
+<div class="chart-box full">
+    <h3>Sample Completed Sessions</h3>
+    <div style="overflow-x: auto;">
+        <table class="analytics-table">
+            <thead>
+                <tr>
+                    <th>Session</th>
+                    <th>User</th>
+                    <th>Filter Type</th>
+                    <th>First Action</th>
+                    <th>First Interaction</th>
+                    <th>Seconds</th>
+                    <th>Course</th>
+                    <th>Category</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in sample_completed_sessions %}
+                <tr>
+                    <td>{{ item.session_id }}</td>
+                    <td>{{ item.user_id }}</td>
+                    <td>{{ item.selected_filter_type }}</td>
+                    <td>{{ item.first_action_name }}</td>
+                    <td>{{ item.first_interaction_name }}</td>
+                    <td>{{ item.seconds_to_first_interaction|floatformat:1 }}</td>
+                    <td>{{ item.selected_course_name|default:item.selected_course_id }}</td>
+                    <td>{{ item.selected_category_name|default:item.selected_category_id }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8">No completed sessions available.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{{ filter_labels|json_script:"bq3-filter-labels" }}
+{{ filter_rates|json_script:"bq3-filter-rates" }}
+{{ filter_avg_times|json_script:"bq3-filter-avg-times" }}
+{{ distribution_labels|json_script:"bq3-distribution-labels" }}
+{{ distribution_values|json_script:"bq3-distribution-values" }}
+{{ interaction_type_labels|json_script:"bq3-interaction-type-labels" }}
+{{ interaction_type_values|json_script:"bq3-interaction-type-values" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodSelect = document.getElementById('period');
+    const customStart = document.getElementById('customRangeFields');
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    if (periodSelect) {
+        periodSelect.addEventListener('change', function () {
+            const show = this.value === 'custom';
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    const filterLabelsEl = document.getElementById('bq3-filter-labels');
+    const filterRatesEl = document.getElementById('bq3-filter-rates');
+    const filterAvgTimesEl = document.getElementById('bq3-filter-avg-times');
+    const distributionLabelsEl = document.getElementById('bq3-distribution-labels');
+    const distributionValuesEl = document.getElementById('bq3-distribution-values');
+    const interactionTypeLabelsEl = document.getElementById('bq3-interaction-type-labels');
+    const interactionTypeValuesEl = document.getElementById('bq3-interaction-type-values');
+
+    if (
+        filterLabelsEl && filterRatesEl && filterAvgTimesEl &&
+        distributionLabelsEl && distributionValuesEl &&
+        interactionTypeLabelsEl && interactionTypeValuesEl
+    ) {
+        const filterLabels = JSON.parse(filterLabelsEl.textContent);
+        const filterRates = JSON.parse(filterRatesEl.textContent);
+        const filterAvgTimes = JSON.parse(filterAvgTimesEl.textContent);
+        const distributionLabels = JSON.parse(distributionLabelsEl.textContent);
+        const distributionValues = JSON.parse(distributionValuesEl.textContent);
+        const interactionTypeLabels = JSON.parse(interactionTypeLabelsEl.textContent);
+        const interactionTypeValues = JSON.parse(interactionTypeValuesEl.textContent);
+
+        createBarChart(
+            'bq3RateByFilterChart',
+            filterLabels,
+            filterRates,
+            'Interaction Rate (%)'
+        );
+
+        createBarChart(
+            'bq3AvgTimeByFilterChart',
+            filterLabels,
+            filterAvgTimes,
+            'Avg Time (s)'
+        );
+
+        createBarChart(
+            'bq3DistributionChart',
+            distributionLabels,
+            distributionValues,
+            'Sessions'
+        );
+
+        createDonutChart(
+            'bq3InteractionTypeChart',
+            interactionTypeLabels,
+            interactionTypeValues
+        );
+    }
+</script>
+{% endblock %}

@@ -21,8 +21,10 @@ from marketplace_analytics.authentication import (
     ApiKeyAuthentication,
     JWTIngestionAuthentication,
 )
-from marketplace_analytics.serializers import AnalyticsEventIngestSerializer
+from marketplace_analytics.serializers import AnalyticsEventIngestSerializer, SearchDiscoveryEventIngestSerializer
 from marketplace_analytics.services import (
+    ingest_search_discovery_event,
+    calculate_bq3_search_to_interaction_metric,
     ingest_business_event,
     calculate_q9_messaging_impact_metric_with_filters,
     resolve_reporting_window,
@@ -400,3 +402,127 @@ def _extract_period_params(request):
             raise ValidationError('start must be earlier than or equal to end.')
 
     return period, start, end
+
+
+class BQ3SearchDiscoveryEventIngestionAPIView(APIView):
+    authentication_classes = (
+        JWTIngestionAuthentication,
+        ApiKeyAuthentication,
+        StaticTokenAuthentication,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        serializer = SearchDiscoveryEventIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = ingest_search_discovery_event(serializer.validated_data)
+
+        return Response(
+            {
+                'status': 'ok',
+                'event_id': event.id,
+                'session_id': event.session_id,
+                'event_name': event.event_name,
+                'occurred_at': event.occurred_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BQ3SearchToInteractionAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        period = request.GET.get('period', 'all_time')
+        start_raw = request.GET.get('start')
+        end_raw = request.GET.get('end')
+
+        start = parse_datetime(start_raw) if start_raw else None
+        end = parse_datetime(end_raw) if end_raw else None
+
+        if start_raw and start is None:
+            raise ValidationError({'start': 'Invalid ISO datetime.'})
+        if end_raw and end is None:
+            raise ValidationError({'end': 'Invalid ISO datetime.'})
+
+        if start and timezone.is_naive(start):
+            start = timezone.make_aware(start, dt_timezone.utc)
+
+        if end and timezone.is_naive(end):
+            end = timezone.make_aware(end, dt_timezone.utc)
+
+        since, until, label = resolve_reporting_window(period, start, end)
+
+        report = calculate_bq3_search_to_interaction_metric(
+            since=since,
+            until=until,
+            period_label=label,
+        )
+        return Response(report, status=status.HTTP_200_OK)
+
+
+def bq3_dashboard(request):
+    period = request.GET.get('period', 'all_time')
+    start_raw = request.GET.get('start')
+    end_raw = request.GET.get('end')
+
+    start = parse_datetime(start_raw) if start_raw else None
+    end = parse_datetime(end_raw) if end_raw else None
+
+    if start_raw and start is None:
+        raise ValidationError({'start': 'Invalid ISO datetime.'})
+    if end_raw and end is None:
+        raise ValidationError({'end': 'Invalid ISO datetime.'})
+
+    if start and timezone.is_naive(start):
+        start = timezone.make_aware(start, dt_timezone.utc)
+
+    if end and timezone.is_naive(end):
+        end = timezone.make_aware(end, dt_timezone.utc)
+
+    since, until, label = resolve_reporting_window(period, start, end)
+
+    report = calculate_bq3_search_to_interaction_metric(
+        since=since,
+        until=until,
+        period_label=label,
+    )
+
+    by_filter_type = report.get('by_filter_type', {})
+    distribution = report.get('distribution_buckets', {})
+    by_interaction_type = report.get('by_interaction_type', {})
+
+    context = {
+        'selected_period': period,
+        'custom_start': start_raw or '',
+        'custom_end': end_raw or '',
+        'period_display': label,
+
+        'search_sessions_started': report.get('search_sessions_started', 0),
+        'search_sessions_with_meaningful_interaction': report.get('search_sessions_with_meaningful_interaction', 0),
+        'interaction_rate': round((report.get('interaction_rate') or 0) * 100, 1),
+        'avg_seconds_to_first_interaction': round(report.get('avg_seconds_to_first_interaction') or 0, 1),
+        'median_seconds_to_first_interaction': round(report.get('median_seconds_to_first_interaction') or 0, 1),
+        'p90_seconds_to_first_interaction': round(report.get('p90_seconds_to_first_interaction') or 0, 1),
+
+        'filter_labels': list(by_filter_type.keys()),
+        'filter_rates': [
+            round((item.get('interaction_rate') or 0) * 100, 1)
+            for item in by_filter_type.values()
+        ],
+        'filter_avg_times': [
+            round(item.get('avg_seconds_to_interaction') or 0, 1)
+            for item in by_filter_type.values()
+        ],
+
+        'distribution_labels': list(distribution.keys()),
+        'distribution_values': list(distribution.values()),
+
+        'interaction_type_labels': list(by_interaction_type.keys()),
+        'interaction_type_values': list(by_interaction_type.values()),
+
+        'sample_completed_sessions': report.get('sample_completed_sessions', []),
+    }
+
+    return render(request, 'bq3_dashboard.html', context)
