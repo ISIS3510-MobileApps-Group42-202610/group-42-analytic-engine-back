@@ -64,8 +64,7 @@ ROOT_URLCONF = 'analytics_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates']
-        ,
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -77,33 +76,43 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'analytics_backend.wsgi.app'
+WSGI_APPLICATION = 'analytics_backend.wsgi.application'
 
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 # Replace the DATABASES section of your settings.py with this
-tmpMarketplacePostgres = urlparse(os.getenv("MARKETPLACE_DATABASE_URL"))
-tmpAnalyticsPostgres = urlparse(os.getenv("ANALYTICS_DATABASE_URL"))
+
+def safe_env(name: str) -> str:
+    value = os.getenv(name, '')
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    return value
+
+marketplace_db_url = safe_env("MARKETPLACE_DATABASE_URL")
+analytics_db_url = safe_env("ANALYTICS_DATABASE_URL")
+
+tmpMarketplacePostgres = urlparse(marketplace_db_url)
+tmpAnalyticsPostgres = urlparse(analytics_db_url)
 
 DATABASES = {
     'marketplace': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': tmpMarketplacePostgres.path.replace('/', ''),
+        'NAME': tmpMarketplacePostgres.path.lstrip('/'),
         'USER': tmpMarketplacePostgres.username,
         'PASSWORD': tmpMarketplacePostgres.password,
         'HOST': tmpMarketplacePostgres.hostname,
-        'PORT': 5432,
+        'PORT': tmpMarketplacePostgres.port or 5432,
         'OPTIONS': dict(parse_qsl(tmpMarketplacePostgres.query)),
     },
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': tmpAnalyticsPostgres.path.replace('/', ''),
+        'NAME': tmpAnalyticsPostgres.path.lstrip('/'),
         'USER': tmpAnalyticsPostgres.username,
         'PASSWORD': tmpAnalyticsPostgres.password,
         'HOST': tmpAnalyticsPostgres.hostname,
-        'PORT': 5432,
+        'PORT': tmpAnalyticsPostgres.port or 5432,
         'OPTIONS': dict(parse_qsl(tmpAnalyticsPostgres.query)),
     }
 }
@@ -159,3 +168,9 @@ ANALYTICS_JWT_SECRET = os.getenv('ANALYTICS_JWT_SECRET', '')
 ANALYTICS_JWT_ALGORITHM = os.getenv('ANALYTICS_JWT_ALGORITHM', 'HS256')
 ANALYTICS_JWT_AUDIENCE = os.getenv('ANALYTICS_JWT_AUDIENCE', '')
 ANALYTICS_JWT_ISSUER = os.getenv('ANALYTICS_JWT_ISSUER', '')
+
+
+# Default primary key field type
+# https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

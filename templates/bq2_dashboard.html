@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}BQ2: Startup & Latency - Analytics Dashboard{% endblock %}
+{% block nav_bq2 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question (BQ Type 1)</h3>
+        <p>What is the average app startup time and screen-to-screen navigation latency across different device models during peak usage periods?</p>
+    </div>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+</div>
+
+{# ====== Sección: Peak Hours ====== #}
+<h2 class="section-title">Peak Hours <span class="peak-badge">Weekdays 8AM-5PM UTC-5 (Bogotá time)</span></h2>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Avg Startup Time (Peak)</div>
+        <div class="value">{{ overall_startup }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Navigation Latency (Peak)</div>
+        <div class="value">{{ overall_nav }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Peak Hour Events</div>
+        <div class="value">{{ peak_count }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Device Models (Peak)</div>
+        <div class="value">{{ device_count }}</div>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Avg Startup Time by Device <span class="peak-badge">Peak Hours</span></h3>
+        <canvas id="startupChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Avg Navigation Latency by Device <span class="peak-badge">Peak Hours</span></h3>
+        <canvas id="navChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Startup Time Trend <span class="peak-badge">Peak Hours</span></h3>
+        <canvas id="trendChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Navigation Latency Trend <span class="peak-badge">Peak Hours</span></h3>
+        <canvas id="navTrendChart"></canvas>
+    </div>
+</div>
+
+{# ====== Sección: All Hours ====== #}
+<h2 class="section-title">All Hours <span class="all-badge">Last 10 Days</span></h2>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Avg Startup Time (All)</div>
+        <div class="value">{{ all_overall_startup }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Navigation Latency (All)</div>
+        <div class="value">{{ all_overall_nav }} <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Total Events (10 days)</div>
+        <div class="value">{{ total_events }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Device Models (All)</div>
+        <div class="value">{{ all_device_count }}</div>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Avg Startup Time by Device <span class="all-badge">All Hours</span></h3>
+        <canvas id="allStartupChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Avg Navigation Latency by Device <span class="all-badge">All Hours</span></h3>
+        <canvas id="allNavChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Startup Time Trend <span class="all-badge">All Hours</span></h3>
+        <canvas id="allTrendChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Avg Navigation Latency Trend <span class="all-badge">All Hours</span></h3>
+        <canvas id="allNavTrendChart"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Peak hours charts
+    createBarChart('startupChart', {{ startup_labels|safe }}, {{ startup_values|safe }}, 'Avg Startup (ms)');
+    createBarChart('navChart', {{ nav_labels|safe }}, {{ nav_values|safe }}, 'Avg Navigation (ms)');
+    createLineChart('trendChart', {{ daily_startup_labels|safe }}, {{ daily_startup_values|safe }}, 'Avg Startup (ms)', '#4f46e5');
+    createLineChart('navTrendChart', {{ daily_nav_labels|safe }}, {{ daily_nav_values|safe }}, 'Avg Navigation (ms)', '#0891b2');
+
+    // All hours charts
+    createBarChart('allStartupChart', {{ all_startup_labels|safe }}, {{ all_startup_values|safe }}, 'Avg Startup (ms)');
+    createBarChart('allNavChart', {{ all_nav_labels|safe }}, {{ all_nav_values|safe }}, 'Avg Navigation (ms)');
+    createLineChart('allTrendChart', {{ all_daily_startup_labels|safe }}, {{ all_daily_startup_values|safe }}, 'Avg Startup (ms)', '#4f46e5');
+    createLineChart('allNavTrendChart', {{ all_daily_nav_labels|safe }}, {{ all_daily_nav_values|safe }}, 'Avg Navigation (ms)', '#0891b2');
+</script>
+{% endblock %}
