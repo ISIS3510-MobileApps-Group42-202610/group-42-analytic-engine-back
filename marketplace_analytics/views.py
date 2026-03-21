@@ -11,18 +11,13 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 
 from marketplace_analytics.models import PerformanceEvent
-from marketplace_analytics.authentication import (
-    StaticTokenAuthentication,
-    ApiKeyAuthentication,
-    JWTIngestionAuthentication,
-)
-from marketplace_analytics.serializers import AnalyticsEventIngestSerializer, SearchDiscoveryEventIngestSerializer
+from marketplace_analytics.serializers import AnalyticsEventIngestSerializer
 from marketplace_analytics.services import (
     ingest_search_discovery_event,
     calculate_bq3_search_to_interaction_metric,
@@ -436,12 +431,8 @@ class BusinessEventIngestionAPIView(APIView):
     Ingest business-relevant analytics events from Android/iOS clients.
     """
 
-    authentication_classes = (
-        StaticTokenAuthentication,
-        ApiKeyAuthentication,
-        JWTIngestionAuthentication,
-    )
-    permission_classes = (IsAuthenticated,)
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
 
     def post(self, request):
         serializer = AnalyticsEventIngestSerializer(data=request.data)
