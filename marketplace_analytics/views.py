@@ -3,6 +3,7 @@ from datetime import timedelta
 from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
+from django.db import OperationalError, InterfaceError
 from django.db.models import Avg, Count, Case, When, Value, CharField, F
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
 from django.http import JsonResponse
@@ -11,13 +12,21 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 
+from marketplace_analytics.authentication import (
+    JWTIngestionAuthentication,
+    ApiKeyAuthentication,
+    StaticTokenAuthentication,
+)
 from marketplace_analytics.models import PerformanceEvent
-from marketplace_analytics.serializers import AnalyticsEventIngestSerializer
+from marketplace_analytics.serializers import (
+    AnalyticsEventIngestSerializer,
+    SearchDiscoveryEventIngestSerializer,
+)
 from marketplace_analytics.services import (
     ingest_search_discovery_event,
     calculate_bq3_search_to_interaction_metric,
@@ -438,7 +447,16 @@ class BusinessEventIngestionAPIView(APIView):
         serializer = AnalyticsEventIngestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        event = ingest_business_event(serializer.validated_data)
+        try:
+            event = ingest_business_event(serializer.validated_data)
+        except (OperationalError, InterfaceError):
+            return Response(
+                {
+                    'status': 'error',
+                    'detail': 'Temporary database connectivity issue. Retry in a few seconds.',
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
             {
