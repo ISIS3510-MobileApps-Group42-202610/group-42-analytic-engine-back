@@ -584,6 +584,37 @@ class BQ3SearchToInteractionAPIView(APIView):
         return Response(report, status=status.HTTP_200_OK)
 
 
+@csrf_exempt
+def legacy_events_endpoint(request):
+    """
+    Legacy endpoint for simple analytics events from Android AnalyticsLogger.
+    Accepts: { "event_name": "...", "user_id": 123, "properties": {...} }
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'POST required'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        event_name = data.get('event_name', 'unknown')
+        user_id = data.get('user_id', 0)
+        properties = data.get('properties', {})
+        
+        # Log simple para debugging - puedes ver estos eventos en los logs de Vercel
+        print(f"[LEGACY EVENT] {event_name} from user {user_id}: {properties}")
+        
+        # Retorna éxito - el evento fue recibido
+        return JsonResponse({
+            'status': 'ok',
+            'event_name': event_name,
+            'user_id': user_id
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+
+
 def bq3_dashboard(request):
     period = request.GET.get('period', 'all_time')
     start_raw = request.GET.get('start')

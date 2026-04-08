@@ -11,9 +11,12 @@ from marketplace_analytics.views import (
     BQ3SearchDiscoveryEventIngestionAPIView,
     BQ3SearchToInteractionAPIView,
     bq3_dashboard,
+    legacy_events_endpoint,
 )
 
 urlpatterns = [
+    # ====== Legacy endpoint for Android AnalyticsLogger ==========
+    path('events', legacy_events_endpoint, name='legacy-events'),
     # ====== Performance BQ2 ==========
     path('api/performance', post_performance_event, name='performance-event'),
     path('api/performance-summary/', performance_summary_api,
