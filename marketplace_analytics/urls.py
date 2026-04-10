@@ -12,6 +12,7 @@ from marketplace_analytics.views import (
     BQ3SearchToInteractionAPIView,
     bq3_dashboard,
     legacy_events_endpoint,
+    bq4_dashboard,
 )
 
 urlpatterns = [
@@ -34,5 +35,6 @@ urlpatterns = [
     path('api/reports/bq3-search-to-interaction/',
          BQ3SearchToInteractionAPIView.as_view(), name='bq3-search-to-interaction'),
     path('api/dashboard/bq3', bq3_dashboard, name='bq3-dashboard'),
+    path('api/dashboard/bq4', bq4_dashboard, name='bq4-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
 ]

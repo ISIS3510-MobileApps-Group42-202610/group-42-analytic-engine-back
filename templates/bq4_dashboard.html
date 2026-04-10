@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}BQ4: Seller Response Time - Analytics Dashboard{% endblock %}
+{% block nav_bq4 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question 4 (Smart Feature)</h3>
+        <p>What is the average seller response time after a buyer initiates contact?</p>
+    </div>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+</div>
+
+<h2 class="section-title">Seller Response Metrics <span class="peak-badge">{{ period_display }}</span></h2>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Avg Response Time</div>
+        <div class="value">{{ avg_response_minutes }} <span class="unit">min</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Fastest Response</div>
+        <div class="value">{{ min_response_minutes }} <span class="unit">min</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Slowest Response</div>
+        <div class="value">{{ max_response_minutes }} <span class="unit">min</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Total Measurements</div>
+        <div class="value">{{ total_measurements }}</div>
+    </div>
+</div>
+
+<h2 class="section-title">Messaging Activity</h2>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Messages Screen Opened</div>
+        <div class="value">{{ total_messages_opened }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Unread Conversations</div>
+        <div class="value">{{ avg_unread_conversations }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Messages Sent</div>
+        <div class="value">{{ total_messages_sent }}</div>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Top 10 Fastest Responding Sellers</h3>
+        <canvas id="sellerChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Response Time Distribution</h3>
+        <canvas id="distributionChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Average Response Time Trend</h3>
+        <canvas id="trendChart"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Top sellers bar chart
+    createBarChart('sellerChart', {{ seller_labels|safe }}, {{ seller_response_times|safe }}, 'Avg Response Time (min)');
+    
+    // Response time distribution pie chart
+    const distributionCtx = document.getElementById('distributionChart').getContext('2d');
+    new Chart(distributionCtx, {
+        type: 'pie',
+        data: {
+            labels: {{ distribution_labels|safe }},
+            datasets: [{
+                data: {{ distribution_values|safe }},
+                backgroundColor: ['#10b981', '#f59e0b', '#ef4444']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+    
+    // Daily trend line chart
+    createLineChart('trendChart', {{ daily_labels|safe }}, {{ daily_values|safe }}, 'Avg Response Time (min)', '#4f46e5');
+</script>
+{% endblock %}
