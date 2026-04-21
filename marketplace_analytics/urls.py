@@ -2,6 +2,7 @@ from django.urls import path
 
 from marketplace_analytics.views import (
     bq11_dashboard,
+     bq12_dashboard,
     post_performance_event,
     bq2_dashboard,
     q9_dashboard,
@@ -32,4 +33,5 @@ urlpatterns = [
          BQ3SearchToInteractionAPIView.as_view(), name='bq3-search-to-interaction'),
     path('api/dashboard/bq3', bq3_dashboard, name='bq3-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
+     path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
 ]

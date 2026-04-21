@@ -287,6 +287,32 @@ body {
     font-size: 13px;
 }
 
+.table-scroll {
+    overflow-x: auto;
+}
+
+.analytics-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.analytics-table th,
+.analytics-table td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    white-space: nowrap;
+}
+
+.analytics-table th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #475569;
+    background: #f8fafc;
+}
+
 @media (max-width: 768px) {
     .charts { grid-template-columns: 1fr; }
     .nav-tabs { padding: 0 16px; }

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}BQ12: Seasonal Demand Patterns - Analytics Dashboard{% endblock %}
+{% block nav_bq12 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ12)</h3>
+    <p>
+        What seasonal demand patterns emerge for academic materials across different faculties
+        and academic calendar periods?
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form">
+        <div class="filter-item">
+            <label for="grain">Grain</label>
+            <select name="grain" id="grain">
+                <option value="day" {% if selected_grain == 'day' %}selected{% endif %}>day</option>
+                <option value="week" {% if selected_grain == 'week' %}selected{% endif %}>week</option>
+                <option value="month" {% if selected_grain == 'month' %}selected{% endif %}>month</option>
+            </select>
+        </div>
+
+        <div class="filter-item">
+            <label for="from">From</label>
+            <input type="date" name="from" id="from" value="{{ selected_from }}">
+        </div>
+
+        <div class="filter-item">
+            <label for="to">To</label>
+            <input type="date" name="to" id="to" value="{{ selected_to }}">
+        </div>
+
+        <div class="filter-item">
+            <label for="university_code">University Code</label>
+            <input type="text" name="university_code" id="university_code" value="{{ selected_university_code }}" maxlength="24">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+</div>
+
+{% if error_message %}
+<div class="methodology-box" style="margin-bottom: 20px; border-left: 4px solid #b91c1c;">
+    <h3>Could not load backend data</h3>
+    <ul>
+        <li>{{ error_message }}</li>
+        <li>Check backend availability and query params, then retry.</li>
+    </ul>
+</div>
+{% endif %}
+
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Rows Returned</div>
+        <div class="value">{{ total_rows }}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Listings Created</div>
+        <div class="value">{{ total_listings }}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Transactions Completed</div>
+        <div class="value">{{ total_transactions }}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Overall Conversion Rate</div>
+        <div class="value">{{ overall_conversion_rate }} <span class="unit">%</span></div>
+    </div>
+</div>
+
+{% if total_rows > 0 %}
+<div class="charts">
+    <div class="chart-box">
+        <h3>Listings Created Over Time by Faculty</h3>
+        <canvas id="bq12FacultyTrendChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Conversion Rate by Academic Calendar Phase</h3>
+        <canvas id="bq12PhaseConversionChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box" style="margin-bottom: 20px;">
+    <h3>How to Read This</h3>
+    <ul>
+        <li>Trend chart: seasonal changes in listing supply segmented by faculty.</li>
+        <li>Phase chart: conversion efficiency by calendar phase for the selected range.</li>
+        <li>Use filters to compare semester windows and verify recurring peaks.</li>
+    </ul>
+</div>
+
+<div class="chart-box full">
+    <h3>Raw Aggregated Data (Backend Response)</h3>
+    <div class="table-scroll">
+        <table class="analytics-table">
+            <thead>
+                <tr>
+                    <th>Period Start</th>
+                    <th>Faculty</th>
+                    <th>Calendar Phase</th>
+                    <th>Listings Created</th>
+                    <th>Transactions Completed</th>
+                    <th>Conversion Rate</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.period_start }}</td>
+                    <td>{{ row.faculty }}</td>
+                    <td>{{ row.calendar_phase }}</td>
+                    <td>{{ row.listings_created }}</td>
+                    <td>{{ row.transactions_completed }}</td>
+                    <td>{{ row.conversion_rate }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{{ period_labels|json_script:"bq12-period-labels" }}
+{{ faculty_datasets|json_script:"bq12-faculty-datasets" }}
+{{ phase_labels|json_script:"bq12-phase-labels" }}
+{{ phase_conversion_rates|json_script:"bq12-phase-conversion-rates" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodLabelsEl = document.getElementById('bq12-period-labels');
+    const facultyDatasetsEl = document.getElementById('bq12-faculty-datasets');
+    const phaseLabelsEl = document.getElementById('bq12-phase-labels');
+    const phaseConversionRatesEl = document.getElementById('bq12-phase-conversion-rates');
+
+    if (periodLabelsEl && facultyDatasetsEl && phaseLabelsEl && phaseConversionRatesEl) {
+        const periodLabels = JSON.parse(periodLabelsEl.textContent);
+        const facultyDatasets = JSON.parse(facultyDatasetsEl.textContent);
+        const phaseLabels = JSON.parse(phaseLabelsEl.textContent);
+        const phaseConversionRates = JSON.parse(phaseConversionRatesEl.textContent);
+
+        const coloredFacultyDatasets = facultyDatasets.map((item, index) => {
+            const color = PALETTE[index % PALETTE.length];
+            return {
+                label: item.label,
+                data: item.data,
+                borderColor: color,
+                backgroundColor: color,
+                fill: false,
+                tension: 0.25,
+                pointRadius: 3,
+            };
+        });
+
+        new Chart(document.getElementById('bq12FacultyTrendChart'), {
+            type: 'line',
+            data: {
+                labels: periodLabels,
+                datasets: coloredFacultyDatasets,
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'bottom' }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Listings Created' }
+                    }
+                }
+            }
+        });
+
+        new Chart(document.getElementById('bq12PhaseConversionChart'), {
+            type: 'bar',
+            data: {
+                labels: phaseLabels,
+                datasets: [{
+                    label: 'Conversion Rate (%)',
+                    data: phaseConversionRates,
+                    backgroundColor: PALETTE,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        title: { display: true, text: 'Conversion Rate (%)' }
+                    }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

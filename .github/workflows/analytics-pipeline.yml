@@ -1,0 +1,62 @@
+name: Analytics Backend Pipeline
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MARKETPLACE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marketplace_ci
+      ANALYTICS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/analytics_ci
+      ANALYTICS_INGEST_TOKEN: ci-token
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create databases
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "CREATE DATABASE marketplace_ci;"
+          psql "postgresql://postgres:postgres@localhost:5432/postgres" -c "CREATE DATABASE analytics_ci;"
+
+      - name: Run Django checks
+        run: python manage.py check
+
+      - name: Run migrations
+        run: python manage.py migrate --noinput
+
+      - name: Run tests
+        run: python manage.py test

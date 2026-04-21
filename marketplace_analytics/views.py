@@ -1,8 +1,12 @@
 import json
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 from datetime import timedelta
 from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.db import OperationalError, InterfaceError
 from django.db.models import Avg, Count, Case, When, Value, CharField, F
 from django.db.models.functions import TruncDate, ExtractHour, ExtractWeekDay
@@ -435,6 +439,106 @@ def bq11_dashboard(request):
     return render(request, 'bq11_dashboard.html', context)
 
 
+def bq12_dashboard(request):
+    """
+    Dashboard for BQ12 seasonal demand patterns.
+    Consumes aggregated analytics from the general backend endpoint.
+    """
+    grain = (request.GET.get('grain') or 'month').strip()
+    date_from = (request.GET.get('from') or '2026-01-01').strip()
+    date_to = (request.GET.get('to') or '2026-12-31').strip()
+    university_code = (request.GET.get('university_code') or 'UNIANDES').strip().upper()
+
+    base_url = getattr(
+        settings,
+        'SEASONAL_DEMAND_API_BASE_URL',
+        'https://group-42-backend.vercel.app',
+    ).rstrip('/')
+
+    query = urlencode({
+        'grain': grain,
+        'from': date_from,
+        'to': date_to,
+        'university_code': university_code,
+    })
+    endpoint_url = f'{base_url}/api/v1/listings/analytics/seasonal-demand?{query}'
+
+    rows = []
+    error_message = ''
+
+    try:
+        with urlopen(endpoint_url, timeout=12) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+            rows = payload.get('data') or []
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        error_message = f'Could not load BQ12 data from backend: {exc}'
+
+    period_set = sorted({row.get('period_start') for row in rows if row.get('period_start')})
+    faculty_set = sorted({row.get('faculty') or 'Unknown' for row in rows})
+    phase_totals = {}
+
+    # Build a period x faculty matrix for listings_created.
+    listings_matrix = {faculty: {period: 0 for period in period_set} for faculty in faculty_set}
+
+    total_listings = 0
+    total_transactions = 0
+
+    for row in rows:
+        period = row.get('period_start')
+        faculty = row.get('faculty') or 'Unknown'
+        phase = row.get('calendar_phase') or 'unknown'
+
+        listings_created = int(row.get('listings_created') or 0)
+        transactions_completed = int(row.get('transactions_completed') or 0)
+
+        total_listings += listings_created
+        total_transactions += transactions_completed
+
+        if period in listings_matrix.get(faculty, {}):
+            listings_matrix[faculty][period] += listings_created
+
+        if phase not in phase_totals:
+            phase_totals[phase] = {'listings': 0, 'transactions': 0}
+        phase_totals[phase]['listings'] += listings_created
+        phase_totals[phase]['transactions'] += transactions_completed
+
+    faculty_datasets = []
+    for faculty in faculty_set:
+        faculty_datasets.append({
+            'label': faculty,
+            'data': [listings_matrix[faculty][period] for period in period_set],
+        })
+
+    phase_labels = sorted(phase_totals.keys())
+    phase_conversion_rates = []
+    for phase in phase_labels:
+        listings_count = phase_totals[phase]['listings']
+        transactions_count = phase_totals[phase]['transactions']
+        rate = (transactions_count / listings_count) if listings_count else 0
+        phase_conversion_rates.append(round(rate * 100, 2))
+
+    overall_conversion_rate = (total_transactions / total_listings) if total_listings else 0
+
+    context = {
+        'selected_grain': grain,
+        'selected_from': date_from,
+        'selected_to': date_to,
+        'selected_university_code': university_code,
+        'error_message': error_message,
+        'total_rows': len(rows),
+        'total_listings': total_listings,
+        'total_transactions': total_transactions,
+        'overall_conversion_rate': round(overall_conversion_rate * 100, 2),
+        'period_labels': period_set,
+        'faculty_datasets': faculty_datasets,
+        'phase_labels': phase_labels,
+        'phase_conversion_rates': phase_conversion_rates,
+        'rows': rows,
+    }
+
+    return render(request, 'bq12_dashboard.html', context)
+
+
 class BusinessEventIngestionAPIView(APIView):
     """
     Ingest business-relevant analytics events from Android/iOS clients.
@@ -461,7 +565,7 @@ class BusinessEventIngestionAPIView(APIView):
         return Response(
             {
                 'status': 'ok',
-                'event_id': event.id,
+                'event_id': event.pk,
                 'event_name': event.event_name,
                 'listing_id': event.listing_id,
             },
@@ -542,7 +646,7 @@ class BQ3SearchDiscoveryEventIngestionAPIView(APIView):
         return Response(
             {
                 'status': 'ok',
-                'event_id': event.id,
+                'event_id': event.pk,
                 'session_id': event.session_id,
                 'event_name': event.event_name,
                 'occurred_at': event.occurred_at,
