@@ -12,9 +12,13 @@ from marketplace_analytics.views import (
     BQ3SearchDiscoveryEventIngestionAPIView,
     BQ3SearchToInteractionAPIView,
     bq3_dashboard,
+    legacy_events_endpoint,
+    bq4_dashboard,
 )
 
 urlpatterns = [
+    # ====== Legacy endpoint for Android AnalyticsLogger ==========
+    path('events', legacy_events_endpoint, name='legacy-events'),
     # ====== Performance BQ2 ==========
     path('api/performance', post_performance_event, name='performance-event'),
     path('api/performance-summary/', performance_summary_api,
@@ -32,6 +36,7 @@ urlpatterns = [
     path('api/reports/bq3-search-to-interaction/',
          BQ3SearchToInteractionAPIView.as_view(), name='bq3-search-to-interaction'),
     path('api/dashboard/bq3', bq3_dashboard, name='bq3-dashboard'),
+    path('api/dashboard/bq4', bq4_dashboard, name='bq4-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
      path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
 ]

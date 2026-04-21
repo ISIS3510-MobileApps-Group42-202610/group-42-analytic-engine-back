@@ -688,6 +688,81 @@ class BQ3SearchToInteractionAPIView(APIView):
         return Response(report, status=status.HTTP_200_OK)
 
 
+@csrf_exempt
+def legacy_events_endpoint(request):
+    """
+    Legacy endpoint for simple analytics events from Android AnalyticsLogger.
+    Accepts: { "event_name": "...", "user_id": 123, "properties": {...} }
+    Stores BQ4 events in MessagingResponseEvent model.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'POST required'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        event_name = data.get('event_name', 'unknown')
+        user_id = data.get('user_id', 0)
+        properties = data.get('properties', {})
+        
+        # Parse timestamp
+        timestamp_str = properties.get('timestamp')
+        if timestamp_str:
+            try:
+                timestamp = timezone.datetime.fromtimestamp(int(timestamp_str) / 1000, tz=timezone.utc)
+            except:
+                timestamp = timezone.now()
+        else:
+            timestamp = timezone.now()
+        
+        # Import the model here to avoid circular imports
+        from marketplace_analytics.models import MessagingResponseEvent
+        
+        # Extract BQ4-specific fields
+        seller_id = properties.get('seller_id')
+        if seller_id:
+            try:
+                seller_id = int(seller_id)
+            except:
+                seller_id = None
+        
+        avg_minutes = properties.get('avg_minutes')
+        if avg_minutes:
+            try:
+                avg_minutes = float(avg_minutes)
+            except:
+                avg_minutes = None
+        
+        unread_count = properties.get('unread_conversations')
+        if unread_count:
+            try:
+                unread_count = int(unread_count)
+            except:
+                unread_count = None
+        
+        # Save to database
+        MessagingResponseEvent.objects.create(
+            event_name=event_name,
+            user_id=user_id,
+            seller_id=seller_id,
+            avg_response_minutes=avg_minutes,
+            unread_conversations=unread_count,
+            timestamp=timestamp,
+            properties=properties
+        )
+        
+        return JsonResponse({
+            'status': 'ok',
+            'event_name': event_name,
+            'user_id': user_id,
+            'saved': True
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+
+
 def bq3_dashboard(request):
     period = request.GET.get('period', 'all_time')
     start_raw = request.GET.get('start')
@@ -752,3 +827,92 @@ def bq3_dashboard(request):
     }
 
     return render(request, 'bq3_dashboard.html', context)
+
+
+def bq4_dashboard(request):
+    """
+    Dashboard for BQ4: Average seller response time after buyer initiates contact.
+    Shows messaging activity and seller responsiveness metrics.
+    """
+    from marketplace_analytics.models import MessagingResponseEvent
+    from django.db.models import Avg, Count, Min, Max
+    
+    # Get time range (last 30 days by default)
+    since = timezone.now() - timedelta(days=30)
+    
+    # Get all response time events
+    response_events = MessagingResponseEvent.objects.filter(
+        event_name='seller_avg_response_time',
+        timestamp__gte=since,
+        avg_response_minutes__isnull=False
+    )
+    
+    # Overall statistics
+    overall_stats = response_events.aggregate(
+        avg_response=Avg('avg_response_minutes'),
+        min_response=Min('avg_response_minutes'),
+        max_response=Max('avg_response_minutes'),
+        total_measurements=Count('id')
+    )
+    
+    # Response time by seller
+    by_seller = list(
+        response_events.values('seller_id')
+        .annotate(
+            avg_response=Avg('avg_response_minutes'),
+            measurements=Count('id')
+        )
+        .order_by('avg_response')[:10]  # Top 10 fastest sellers
+    )
+    
+    # Messages screen activity
+    messages_opened = MessagingResponseEvent.objects.filter(
+        event_name='messages_screen_opened',
+        timestamp__gte=since
+    )
+    
+    total_opens = messages_opened.count()
+    avg_unread = messages_opened.aggregate(avg=Avg('unread_conversations'))['avg'] or 0
+    
+    # Message sent activity
+    messages_sent = MessagingResponseEvent.objects.filter(
+        event_name='message_sent',
+        timestamp__gte=since
+    ).count()
+    
+    # Daily trend
+    daily_response_times = list(
+        response_events.annotate(date=TruncDate('timestamp'))
+        .values('date')
+        .annotate(avg_response=Avg('avg_response_minutes'))
+        .order_by('date')
+    )
+    
+    # Response time distribution (buckets)
+    fast_responses = response_events.filter(avg_response_minutes__lt=5).count()
+    medium_responses = response_events.filter(avg_response_minutes__gte=5, avg_response_minutes__lt=30).count()
+    slow_responses = response_events.filter(avg_response_minutes__gte=30).count()
+    
+    context = {
+        'period_display': 'Last 30 Days',
+        'total_measurements': overall_stats['total_measurements'] or 0,
+        'avg_response_minutes': round(overall_stats['avg_response'] or 0, 1),
+        'min_response_minutes': round(overall_stats['min_response'] or 0, 1),
+        'max_response_minutes': round(overall_stats['max_response'] or 0, 1),
+        
+        'total_messages_opened': total_opens,
+        'avg_unread_conversations': round(avg_unread, 1),
+        'total_messages_sent': messages_sent,
+        
+        'seller_labels': [f"Seller {s['seller_id']}" for s in by_seller],
+        'seller_response_times': [round(s['avg_response'], 1) for s in by_seller],
+        'seller_measurements': [s['measurements'] for s in by_seller],
+        
+        'daily_labels': [d['date'].strftime('%b %d') for d in daily_response_times],
+        'daily_values': [round(d['avg_response'], 1) for d in daily_response_times],
+        
+        'distribution_labels': ['< 5 min', '5-30 min', '> 30 min'],
+        'distribution_values': [fast_responses, medium_responses, slow_responses],
+    }
+    
+    return render(request, 'bq4_dashboard.html', context)

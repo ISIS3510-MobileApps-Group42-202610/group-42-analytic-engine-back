@@ -173,3 +173,36 @@ class SearchDiscoveryEvent(models.Model):
 
     def __str__(self):
         return f'{self.session_id} - {self.event_name} - {self.occurred_at.isoformat()}'
+
+
+class MessagingResponseEvent(models.Model):
+    """
+    BQ4: Tracks seller response times and messaging activity.
+    Stores events related to messaging interactions between buyers and sellers.
+    """
+    
+    class EventName(models.TextChoices):
+        MESSAGES_SCREEN_OPENED = 'messages_screen_opened', 'Messages Screen Opened'
+        MESSAGE_SENT = 'message_sent', 'Message Sent'
+        SELLER_AVG_RESPONSE_TIME = 'seller_avg_response_time', 'Seller Avg Response Time'
+        FIRST_MESSAGE_SENT = 'first_message_sent', 'First Message Sent'
+    
+    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
+    user_id = models.BigIntegerField(db_index=True)
+    seller_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    avg_response_minutes = models.FloatField(null=True, blank=True, help_text='Average response time in minutes')
+    unread_conversations = models.IntegerField(null=True, blank=True)
+    timestamp = models.DateTimeField(db_index=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+    properties = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        ordering = ['-timestamp', '-id']
+        indexes = [
+            models.Index(fields=['event_name', 'timestamp'], name='bq4_event_time_idx'),
+            models.Index(fields=['seller_id', 'timestamp'], name='bq4_seller_time_idx'),
+            models.Index(fields=['user_id'], name='bq4_user_idx'),
+        ]
+    
+    def __str__(self):
+        return f'{self.event_name} - User {self.user_id} - {self.timestamp.isoformat()}'
