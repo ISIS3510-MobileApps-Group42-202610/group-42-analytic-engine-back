@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from marketplace_analytics.models import AnalyticsEvent
 from marketplace_analytics.models import SearchDiscoveryEvent
+from marketplace_analytics.models import MessagingResponseEvent
 
 
 class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
@@ -121,5 +122,76 @@ class SearchDiscoveryEventIngestSerializer(serializers.ModelSerializer):
 
         if attrs['occurred_at'] > timezone.now() + timedelta(minutes=5):
             raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        return attrs
+    
+class MessagingResponseEventIngestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessagingResponseEvent
+        fields = [
+            'event_name',
+            'user_id',
+            'seller_id',
+            'avg_response_minutes',
+            'unread_conversations',
+            'timestamp',
+            'properties',
+        ]
+
+    def validate_properties(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('properties must be a JSON object.')
+        return value
+
+    def validate(self, attrs):
+        event_name = attrs.get('event_name')
+        seller_id = attrs.get('seller_id')
+        avg_response_minutes = attrs.get('avg_response_minutes')
+        unread_conversations = attrs.get('unread_conversations')
+        timestamp = attrs.get('timestamp')
+
+        if 'properties' not in attrs or attrs['properties'] is None:
+            attrs['properties'] = {}
+
+        if timestamp is None:
+            attrs['timestamp'] = timezone.now()
+
+        if attrs['timestamp'] > timezone.now() + timedelta(minutes=5):
+            raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        response_metric_events = {
+            MessagingResponseEvent.EventName.SELLER_AVG_RESPONSE_TIME,
+        }
+
+        contact_events = {
+            MessagingResponseEvent.EventName.MESSAGE_SENT,
+            MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT,
+        }
+
+        if event_name in response_metric_events:
+            if seller_id is None:
+                raise serializers.ValidationError(
+                    'seller_avg_response_time requires seller_id.'
+                )
+            if avg_response_minutes is None:
+                raise serializers.ValidationError(
+                    'seller_avg_response_time requires avg_response_minutes.'
+                )
+            if avg_response_minutes < 0:
+                raise serializers.ValidationError(
+                    'avg_response_minutes must be greater than or equal to 0.'
+                )
+
+        if event_name in contact_events and seller_id is None:
+            raise serializers.ValidationError(
+                f'{event_name} requires seller_id.'
+            )
+
+        if unread_conversations is not None and unread_conversations < 0:
+            raise serializers.ValidationError(
+                'unread_conversations must be greater than or equal to 0.'
+            )
 
         return attrs

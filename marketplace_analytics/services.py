@@ -2,11 +2,16 @@ from datetime import datetime
 
 from django.db import transaction
 from django.db.models import QuerySet
+from django.db.models import Avg
+from django.db.models import Count
+from django.db.models import Min
+from django.db.models import Max
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from collections import defaultdict
 from statistics import median
 
-from marketplace_analytics.models import AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent
+from marketplace_analytics.models import AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
 
 
 MESSAGING_EVENTS = {
@@ -339,6 +344,113 @@ def calculate_bq3_search_to_interaction_metric(
         'by_filter_type': breakdown,
         'by_interaction_type': dict(interaction_breakdown),
         'sample_completed_sessions': completed_sessions[:20],
+    }
+
+def ingest_messaging_response_event(validated_event_data):
+    return MessagingResponseEvent.objects.create(**validated_event_data)
+
+
+def calculate_bq6_seller_response_time_metric(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    period_label: str = 'all_time',
+):
+    base_qs = MessagingResponseEvent.objects.all()
+
+    if since is not None:
+        base_qs = base_qs.filter(timestamp__gte=since)
+    if until is not None:
+        base_qs = base_qs.filter(timestamp__lte=until)
+
+    response_events = base_qs.filter(
+        event_name=MessagingResponseEvent.EventName.SELLER_AVG_RESPONSE_TIME,
+        avg_response_minutes__isnull=False,
+        seller_id__isnull=False,
+    )
+
+    overall_stats = response_events.aggregate(
+        avg_response=Avg('avg_response_minutes'),
+        min_response=Min('avg_response_minutes'),
+        max_response=Max('avg_response_minutes'),
+        total_measurements=Count('id'),
+    )
+
+    seller_breakdown_qs = (
+        response_events
+        .values('seller_id')
+        .annotate(
+            avg_response_minutes=Avg('avg_response_minutes'),
+            measurements=Count('id'),
+        )
+        .order_by('avg_response_minutes', '-measurements')
+    )
+
+    top_fastest_sellers = list(seller_breakdown_qs[:10])
+    slowest_sellers = list(seller_breakdown_qs.order_by('-avg_response_minutes', '-measurements')[:10])
+
+    daily_trend = list(
+        response_events
+        .annotate(date=TruncDate('timestamp'))
+        .values('date')
+        .annotate(
+            avg_response_minutes=Avg('avg_response_minutes'),
+            measurements=Count('id'),
+        )
+        .order_by('date')
+    )
+
+    screen_opened_count = base_qs.filter(
+        event_name=MessagingResponseEvent.EventName.MESSAGES_SCREEN_OPENED
+    ).count()
+
+    message_sent_count = base_qs.filter(
+        event_name__in=[
+            MessagingResponseEvent.EventName.MESSAGE_SENT,
+            MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT,
+        ]
+    ).count()
+
+    avg_unread_conversations = (
+        base_qs.filter(
+            event_name=MessagingResponseEvent.EventName.MESSAGES_SCREEN_OPENED,
+            unread_conversations__isnull=False,
+        ).aggregate(avg=Avg('unread_conversations'))['avg']
+        or 0
+    )
+
+    values = list(
+        response_events.values_list('avg_response_minutes', flat=True)
+    )
+
+    distribution_buckets = {
+        'under_5_min': response_events.filter(avg_response_minutes__lt=5).count(),
+        'from_5_to_30_min': response_events.filter(avg_response_minutes__gte=5, avg_response_minutes__lt=30).count(),
+        'from_30_to_120_min': response_events.filter(avg_response_minutes__gte=30, avg_response_minutes__lt=120).count(),
+        'over_120_min': response_events.filter(avg_response_minutes__gte=120).count(),
+    }
+
+    return {
+        'period': {
+            'label': period_label,
+            'since': since,
+            'until': until,
+        },
+        'metric_definition': (
+            'Average seller response time, in minutes, after a buyer initiates contact.'
+        ),
+        'total_measurements': overall_stats['total_measurements'] or 0,
+        'avg_response_minutes': overall_stats['avg_response'],
+        'median_response_minutes': _safe_median(values),
+        'p90_response_minutes': _percentile(values, 90),
+        'min_response_minutes': overall_stats['min_response'],
+        'max_response_minutes': overall_stats['max_response'],
+        'messages_screen_opened': screen_opened_count,
+        'messages_sent': message_sent_count,
+        'avg_unread_conversations': avg_unread_conversations,
+        'distribution_buckets': distribution_buckets,
+        'top_fastest_sellers': top_fastest_sellers,
+        'slowest_sellers': slowest_sellers,
+        'daily_trend': daily_trend,
     }
 
 
