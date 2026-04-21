@@ -14,6 +14,9 @@ from marketplace_analytics.views import (
     bq3_dashboard,
     legacy_events_endpoint,
     bq4_dashboard,
+    bq6_dashboard,
+    BQ6MessagingResponseEventIngestionAPIView,
+    BQ6SellerResponseTimeAPIView,
 )
 
 urlpatterns = [
@@ -38,5 +41,14 @@ urlpatterns = [
     path('api/dashboard/bq3', bq3_dashboard, name='bq3-dashboard'),
     path('api/dashboard/bq4', bq4_dashboard, name='bq4-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
-     path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
+    path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
+
+    # ====== BQ6 Messaging Response Time ==========   
+
+    path('api/bq6/events/', BQ6MessagingResponseEventIngestionAPIView.as_view(), name='bq6-event-ingestion'),
+    path('api/reports/bq6-seller-response-time/', BQ6SellerResponseTimeAPIView.as_view(), name='bq6-seller-response-time'),
+    path('api/dashboard/bq6', bq6_dashboard, name='bq6-dashboard'),
+
+     
+
 ]
