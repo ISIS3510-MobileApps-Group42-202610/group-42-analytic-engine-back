@@ -1,6 +1,7 @@
 from django.urls import path
 
 from marketplace_analytics.views import (
+    bq1_dashboard,
     bq11_dashboard,
      bq12_dashboard,
     post_performance_event,
@@ -17,11 +18,17 @@ from marketplace_analytics.views import (
     bq6_dashboard,
     BQ6MessagingResponseEventIngestionAPIView,
     BQ6SellerResponseTimeAPIView,
+    BQ1CrashEventIngestionAPIView,
+    BQ1CrashHotspotAPIView,
 )
 
 urlpatterns = [
     # ====== Legacy endpoint for Android AnalyticsLogger ==========
     path('events', legacy_events_endpoint, name='legacy-events'),
+    # ====== BQ1 Crash Hotspots ==========
+    path('api/bq1/events/', BQ1CrashEventIngestionAPIView.as_view(), name='bq1-event-ingestion'),
+    path('api/reports/bq1-crash-hotspots/', BQ1CrashHotspotAPIView.as_view(), name='bq1-crash-hotspots'),
+    path('api/dashboard/bq1', bq1_dashboard, name='bq1-dashboard'),
     # ====== Performance BQ2 ==========
     path('api/performance', post_performance_event, name='performance-event'),
     path('api/performance-summary/', performance_summary_api,

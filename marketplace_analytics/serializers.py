@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
+from marketplace_analytics.models import CrashEvent
 from marketplace_analytics.models import AnalyticsEvent
 from marketplace_analytics.models import SearchDiscoveryEvent
 from marketplace_analytics.models import MessagingResponseEvent
@@ -49,6 +50,62 @@ class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
 
         if attrs['occurred_at'] > timezone.now() + timedelta(minutes=5):
             raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        return attrs
+
+
+class CrashEventIngestSerializer(serializers.ModelSerializer):
+    timestamp = serializers.DateTimeField(source='occurred_at', required=False)
+
+    class Meta:
+        model = CrashEvent
+        fields = [
+            'event_name',
+            'feature_name',
+            'code_location',
+            'crash_signature',
+            'stack_trace',
+            'device_model',
+            'platform',
+            'os_version',
+            'app_version',
+            'timestamp',
+            'metadata',
+            'client_event_id',
+        ]
+
+    def validate_metadata(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('metadata must be a JSON object.')
+        return value
+
+    def validate(self, attrs):
+        if 'metadata' not in attrs or attrs['metadata'] is None:
+            attrs['metadata'] = {}
+
+        if 'occurred_at' not in attrs:
+            attrs['occurred_at'] = timezone.now()
+
+        if attrs['occurred_at'] > timezone.now() + timedelta(minutes=5):
+            raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        feature_name = (attrs.get('feature_name') or '').strip()
+        code_location = (attrs.get('code_location') or '').strip()
+        crash_signature = (attrs.get('crash_signature') or '').strip()
+
+        if not crash_signature:
+            raise serializers.ValidationError('crash_signature is required.')
+
+        if not feature_name and not code_location:
+            raise serializers.ValidationError(
+                'Either feature_name or code_location must be provided.'
+            )
+
+        attrs['feature_name'] = feature_name
+        attrs['code_location'] = code_location
+        attrs['crash_signature'] = crash_signature
 
         return attrs
 

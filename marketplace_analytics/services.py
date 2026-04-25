@@ -1,7 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from django.db import transaction
-from django.db.models import QuerySet
+from django.db import ProgrammingError, transaction
 from django.db.models import Avg
 from django.db.models import Count
 from django.db.models import Min
@@ -10,8 +9,9 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from collections import defaultdict
 from statistics import median
+from typing import cast
 
-from marketplace_analytics.models import AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
+from marketplace_analytics.models import CrashEvent, AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
 
 
 MESSAGING_EVENTS = {
@@ -27,6 +27,10 @@ def ingest_business_event(validated_event_data):
     event = AnalyticsEvent.objects.create(**validated_event_data)
     _upsert_listing_state_from_event(event)
     return event
+
+
+def ingest_crash_event(validated_event_data):
+    return CrashEvent.objects.create(**validated_event_data)
 
 
 def _upsert_listing_state_from_event(event):
@@ -179,7 +183,7 @@ def resolve_reporting_window(period: str, start=None, end=None):
     now = timezone.now()
 
     if period == 'last_30_days':
-        return now - timezone.timedelta(days=30), now, period
+        return now - timedelta(days=30), now, period
 
     if period == 'semester_to_date':
         semester_start = _semester_start_for(now)
@@ -191,12 +195,155 @@ def resolve_reporting_window(period: str, start=None, end=None):
     return None, None, 'all_time'
 
 
+def calculate_bq1_crash_hotspot_metric(
+    since: datetime | None = None,
+    until: datetime | None = None,
+    period_label: str = 'all_time',
+):
+    try:
+        events = CrashEvent.objects.all()
+
+        if since is not None:
+            events = events.filter(occurred_at__gte=since)
+        if until is not None:
+            events = events.filter(occurred_at__lte=until)
+
+        events = events.order_by('occurred_at', 'id')
+
+        hotspot_counts = defaultdict(lambda: {
+            'count': 0,
+            'device_counts': defaultdict(int),
+            'os_counts': defaultdict(int),
+            'feature_name': '',
+            'code_location': '',
+            'crash_signature': '',
+        })
+        device_counts = defaultdict(int)
+        os_counts = defaultdict(int)
+        feature_counts = defaultdict(int)
+
+        total_crashes = 0
+
+        for event in events:
+            hotspot_label = _crash_hotspot_label(event)
+            device_label = event.device_model or 'Unknown device'
+            os_label = event.os_version or 'Unknown OS'
+
+            bucket = hotspot_counts[hotspot_label]
+            bucket['count'] += 1
+            bucket['feature_name'] = bucket['feature_name'] or event.feature_name or ''
+            bucket['code_location'] = bucket['code_location'] or event.code_location or ''
+            bucket['crash_signature'] = bucket['crash_signature'] or event.crash_signature or ''
+            bucket['device_counts'][device_label] += 1
+            bucket['os_counts'][os_label] += 1
+
+            device_counts[device_label] += 1
+            os_counts[os_label] += 1
+            if event.feature_name:
+                feature_counts[event.feature_name] += 1
+
+            total_crashes += 1
+
+    except ProgrammingError:
+        return {
+            'period': {
+                'label': period_label,
+                'since': since,
+                'until': until,
+            },
+            'metric_definition': (
+                'Crash concentration by normalized code location or feature name. '
+                'Percentages represent the share of crash reports, not exposure-adjusted crash rates.'
+            ),
+            'total_crashes': 0,
+            'unique_hotspots': 0,
+            'unique_devices': 0,
+            'unique_os_versions': 0,
+            'top_hotspot': None,
+            'top_hotspots': [],
+            'device_breakdown': [],
+            'os_breakdown': [],
+            'feature_breakdown': [],
+            'definitions': {
+                'hotspot_label_order': (
+                    'code_location is preferred, then feature_name, then crash_signature.'
+                ),
+                'device_bucket': 'Unknown device is used when the crash log does not include a device model.',
+                'os_bucket': 'Unknown OS is used when the crash log does not include an OS version.',
+                'table_missing_fallback': 'Crash telemetry table is not migrated yet; showing an empty dashboard.',
+            },
+        }
+
+    def _sorted_count_rows(counter):
+        return [
+            {
+                'label': label,
+                'count': count,
+                'percentage': round((count / total_crashes) * 100, 2) if total_crashes else 0,
+            }
+            for label, count in sorted(counter.items(), key=lambda item: (-item[1], item[0].lower()))
+        ]
+
+    top_hotspots = []
+    for label, data in sorted(hotspot_counts.items(), key=lambda item: (-item[1]['count'], item[0].lower()))[:10]:
+        top_hotspots.append({
+            'label': label,
+            'count': data['count'],
+            'percentage': round((data['count'] / total_crashes) * 100, 2) if total_crashes else 0,
+            'feature_name': data['feature_name'] or 'Unknown feature',
+            'code_location': data['code_location'] or 'Unknown location',
+            'crash_signature': data['crash_signature'] or 'Unknown signature',
+            'device_breakdown': _sorted_count_rows(cast(dict[str, int], data['device_counts'])),
+            'os_breakdown': _sorted_count_rows(cast(dict[str, int], data['os_counts'])),
+        })
+
+    top_hotspot = top_hotspots[0] if top_hotspots else None
+
+    return {
+        'period': {
+            'label': period_label,
+            'since': since,
+            'until': until,
+        },
+        'metric_definition': (
+            'Crash concentration by normalized code location or feature name. '
+            'Percentages represent the share of crash reports, not exposure-adjusted crash rates.'
+        ),
+        'total_crashes': total_crashes,
+        'unique_hotspots': len(hotspot_counts),
+        'unique_devices': len(device_counts),
+        'unique_os_versions': len(os_counts),
+        'top_hotspot': top_hotspot,
+        'top_hotspots': top_hotspots,
+        'device_breakdown': _sorted_count_rows(dict(device_counts)),
+        'os_breakdown': _sorted_count_rows(dict(os_counts)),
+        'feature_breakdown': _sorted_count_rows(dict(feature_counts)),
+        'definitions': {
+            'hotspot_label_order': (
+                'code_location is preferred, then feature_name, then crash_signature.'
+            ),
+            'device_bucket': 'Unknown device is used when the crash log does not include a device model.',
+            'os_bucket': 'Unknown OS is used when the crash log does not include an OS version.',
+        },
+    }
+
+
 def _semester_start_for(reference_dt):
     # Academic semester simplification: Jan-Jun or Jul-Dec.
     month = reference_dt.month
     if month <= 6:
         return reference_dt.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     return reference_dt.replace(month=7, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _crash_hotspot_label(event: CrashEvent) -> str:
+    if event.code_location:
+        return event.code_location
+    if event.feature_name:
+        return event.feature_name
+    if event.crash_signature:
+        return event.crash_signature
+    return 'Unknown crash location'
 
 BQ3_START_EVENTS = {
     SearchDiscoveryEvent.EventName.SEARCH_STARTED,
@@ -276,11 +423,12 @@ def calculate_bq3_search_to_interaction_metric(
     completed_sessions = []
     elapsed_seconds = []
 
-    breakdown = defaultdict(lambda: {
+    breakdown: dict[str, dict[str, float | int | None]] = defaultdict(lambda: {
         'sessions_started': 0,
         'sessions_with_interaction': 0,
         'avg_seconds_to_interaction': None,
         'median_seconds_to_interaction': None,
+        'interaction_rate': None,
     })
 
     interaction_breakdown = defaultdict(int)
@@ -494,7 +642,7 @@ def _percentile(values, percentile_rank):
     lower = int(k)
     upper = min(lower + 1, len(ordered) - 1)
     fraction = k - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+    return float(ordered[lower] + (ordered[upper] - ordered[lower]) * fraction)
 
 
 def _build_distribution_buckets(values):

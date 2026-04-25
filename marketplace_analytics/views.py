@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -26,13 +27,16 @@ from marketplace_analytics.authentication import (
     ApiKeyAuthentication,
     StaticTokenAuthentication,
 )
-from marketplace_analytics.models import PerformanceEvent, MessagingResponseEvent
+from marketplace_analytics.models import PerformanceEvent
 from marketplace_analytics.serializers import (
     AnalyticsEventIngestSerializer,
+    CrashEventIngestSerializer,
     SearchDiscoveryEventIngestSerializer,
     MessagingResponseEventIngestSerializer,
 )
 from marketplace_analytics.services import (
+    ingest_crash_event,
+    calculate_bq1_crash_hotspot_metric,
     ingest_search_discovery_event,
     calculate_bq3_search_to_interaction_metric,
     ingest_business_event,
@@ -258,6 +262,113 @@ def bq2_dashboard(request):
 
     # se renderiza con las graficas y eso bonito para el analytics persona
     return render(request, 'bq2_dashboard.html', context)
+
+
+def bq1_dashboard(request):
+    """
+    Dashboard for BQ1: crash hotspots by feature/code location.
+    """
+    period, start, end = _extract_period_params(request)
+    since, until, resolved_period = resolve_reporting_window(
+        period=period,
+        start=start,
+        end=end,
+    )
+
+    report = calculate_bq1_crash_hotspot_metric(
+        since=since,
+        until=until,
+        period_label=resolved_period,
+    )
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    top_hotspot = report.get('top_hotspot') or {}
+
+    context = {
+        'selected_period': resolved_period,
+        'period_display': period_label_map.get(resolved_period, resolved_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+        'total_crashes': report.get('total_crashes', 0),
+        'unique_hotspots': report.get('unique_hotspots', 0),
+        'unique_devices': report.get('unique_devices', 0),
+        'unique_os_versions': report.get('unique_os_versions', 0),
+        'top_hotspot_label': top_hotspot.get('label', 'No data yet'),
+        'top_hotspot_count': top_hotspot.get('count', 0),
+        'top_hotspot_share': top_hotspot.get('percentage', 0),
+        'top_hotspot_feature_name': top_hotspot.get('feature_name', 'Unknown feature'),
+        'top_hotspot_code_location': top_hotspot.get('code_location', 'Unknown location'),
+        'top_hotspot_signature': top_hotspot.get('crash_signature', 'Unknown signature'),
+        'hotspot_labels': [item['label'] for item in report.get('top_hotspots', [])],
+        'hotspot_values': [item['count'] for item in report.get('top_hotspots', [])],
+        'device_labels': [item['label'] for item in report.get('device_breakdown', [])],
+        'device_values': [item['count'] for item in report.get('device_breakdown', [])],
+        'os_labels': [item['label'] for item in report.get('os_breakdown', [])],
+        'os_values': [item['count'] for item in report.get('os_breakdown', [])],
+        'feature_labels': [item['label'] for item in report.get('feature_breakdown', [])],
+        'feature_values': [item['count'] for item in report.get('feature_breakdown', [])],
+        'top_hotspot_device_labels': [item['label'] for item in top_hotspot.get('device_breakdown', [])],
+        'top_hotspot_device_values': [item['count'] for item in top_hotspot.get('device_breakdown', [])],
+        'top_hotspot_os_labels': [item['label'] for item in top_hotspot.get('os_breakdown', [])],
+        'top_hotspot_os_values': [item['count'] for item in top_hotspot.get('os_breakdown', [])],
+        'top_hotspots': report.get('top_hotspots', []),
+        'definitions': report.get('definitions', {}),
+    }
+
+    return render(request, 'bq1_dashboard.html', context)
+
+
+class BQ1CrashEventIngestionAPIView(APIView):
+    authentication_classes = (
+        JWTIngestionAuthentication,
+        ApiKeyAuthentication,
+        StaticTokenAuthentication,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        serializer = CrashEventIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = ingest_crash_event(serializer.validated_data)
+
+        return Response(
+            {
+                'status': 'ok',
+                'event_id': event.pk,
+                'event_name': event.event_name,
+                'feature_name': event.feature_name,
+                'code_location': event.code_location,
+                'crash_signature': event.crash_signature,
+                'occurred_at': event.occurred_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BQ1CrashHotspotAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        period, start, end = _extract_period_params(request)
+        since, until, resolved_period = resolve_reporting_window(
+            period=period,
+            start=start,
+            end=end,
+        )
+
+        report = calculate_bq1_crash_hotspot_metric(
+            since=since,
+            until=until,
+            period_label=resolved_period,
+        )
+        return Response(report, status=status.HTTP_200_OK)
 
 
 def performance_summary_api(request):
@@ -614,8 +725,8 @@ def _extract_period_params(request):
             raise ValidationError(
                 'custom period requires start and end query params in ISO-8601 format.')
 
-        start = parse_datetime(start_raw)
-        end = parse_datetime(end_raw)
+        start = parse_datetime(str(start_raw))
+        end = parse_datetime(str(end_raw))
 
         if not start or not end:
             raise ValidationError(
@@ -667,8 +778,8 @@ class BQ3SearchToInteractionAPIView(APIView):
         start_raw = request.GET.get('start')
         end_raw = request.GET.get('end')
 
-        start = parse_datetime(start_raw) if start_raw else None
-        end = parse_datetime(end_raw) if end_raw else None
+        start = parse_datetime(str(start_raw)) if start_raw else None
+        end = parse_datetime(str(end_raw)) if end_raw else None
 
         if start_raw and start is None:
             raise ValidationError({'start': 'Invalid ISO datetime.'})
@@ -753,7 +864,7 @@ def legacy_events_endpoint(request):
         timestamp_str = properties.get('timestamp')
         if timestamp_str:
             try:
-                timestamp = timezone.datetime.fromtimestamp(int(timestamp_str) / 1000, tz=timezone.utc)
+                timestamp = datetime.fromtimestamp(int(timestamp_str) / 1000, tz=dt_timezone.utc)
             except:
                 timestamp = timezone.now()
         else:
@@ -813,8 +924,8 @@ def bq3_dashboard(request):
     start_raw = request.GET.get('start')
     end_raw = request.GET.get('end')
 
-    start = parse_datetime(start_raw) if start_raw else None
-    end = parse_datetime(end_raw) if end_raw else None
+    start = parse_datetime(str(start_raw)) if start_raw else None
+    end = parse_datetime(str(end_raw)) if end_raw else None
 
     if start_raw and start is None:
         raise ValidationError({'start': 'Invalid ISO datetime.'})
