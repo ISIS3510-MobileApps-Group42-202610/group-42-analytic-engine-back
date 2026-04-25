@@ -35,6 +35,48 @@ class PerformanceEvent(models.Model):
         return f"{self.event_type} - {self.device_model} - {self.duration_ms}ms"
 
 
+class CrashEvent(models.Model):
+    """
+    Crash telemetry emitted by the mobile apps.
+
+    The event stores enough context to identify the hottest crash location or
+    feature and to segment it by device model and OS version.
+    """
+
+    class EventName(models.TextChoices):
+        CRASH_OCCURRED = 'crash_occurred', 'Crash Occurred'
+
+    PLATFORM_CHOICES = PerformanceEvent.PLATFORM_CHOICES
+
+    event_name = models.CharField(max_length=30, choices=EventName.choices, db_index=True)
+    feature_name = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    code_location = models.CharField(max_length=255, blank=True, default='', db_index=True)
+    crash_signature = models.CharField(max_length=255, db_index=True)
+    stack_trace = models.TextField(blank=True, default='')
+    device_model = models.CharField(max_length=100, blank=True, default='', db_index=True)
+    platform = models.CharField(max_length=10, choices=PLATFORM_CHOICES, default='android')
+    os_version = models.CharField(max_length=20, blank=True, default='')
+    app_version = models.CharField(max_length=20, blank=True, default='')
+    occurred_at = models.DateTimeField(db_index=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    client_event_id = models.CharField(max_length=64, null=True, blank=True, unique=True)
+
+    class Meta:
+        ordering = ['-occurred_at', '-id']
+        indexes = [
+            models.Index(fields=['event_name', 'occurred_at'], name='bq1_event_time_idx'),
+            models.Index(fields=['crash_signature', 'occurred_at'], name='bq1_signature_idx'),
+            models.Index(fields=['code_location', 'occurred_at'], name='bq1_location_idx'),
+            models.Index(fields=['feature_name', 'occurred_at'], name='bq1_feature_idx'),
+            models.Index(fields=['device_model', 'platform'], name='bq1_device_platform_idx'),
+        ]
+
+    def __str__(self):
+        location = self.code_location or self.feature_name or self.crash_signature
+        return f'{self.event_name} - {location} - {self.occurred_at.isoformat()}'
+
+
 class AnalyticsEvent(models.Model):
     """
     Canonical business-event log ingested from client apps.

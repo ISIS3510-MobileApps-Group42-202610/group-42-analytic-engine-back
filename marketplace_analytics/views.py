@@ -29,14 +29,20 @@ from marketplace_analytics.authentication import (
 from marketplace_analytics.models import PerformanceEvent
 from marketplace_analytics.serializers import (
     AnalyticsEventIngestSerializer,
+    CrashEventIngestSerializer,
     SearchDiscoveryEventIngestSerializer,
+    MessagingResponseEventIngestSerializer,
 )
 from marketplace_analytics.services import (
+    ingest_crash_event,
+    calculate_bq1_crash_hotspot_metric,
     ingest_search_discovery_event,
     calculate_bq3_search_to_interaction_metric,
     ingest_business_event,
     calculate_q9_messaging_impact_metric_with_filters,
     resolve_reporting_window,
+    ingest_messaging_response_event,
+    calculate_bq6_seller_response_time_metric
 )
 
 
@@ -106,7 +112,7 @@ def get_peak_events(days=10):
     """
     since = timezone.now() - timedelta(days=days)
     bogota_tz = ZoneInfo('America/Bogota')
-    
+
     return (
         PerformanceEvent.objects
         .filter(timestamp__gte=since)
@@ -114,8 +120,10 @@ def get_peak_events(days=10):
             hour_bogota=ExtractHour('timestamp', tzinfo=bogota_tz),
             weekday_bogota=ExtractWeekDay('timestamp', tzinfo=bogota_tz),
             device_model_display=Case(
-                When(device_model__isnull=True, then=Value("Other (Chrome, Desktop)")),
-                When(device_model__exact='', then=Value("Other (Chrome, Desktop)")),
+                When(device_model__isnull=True, then=Value(
+                    "Other (Chrome, Desktop)")),
+                When(device_model__exact='', then=Value(
+                    "Other (Chrome, Desktop)")),
                 default=F('device_model'),
                 output_field=CharField()
             )
@@ -177,7 +185,8 @@ def bq2_dashboard(request):
     # ====== Queries para TODOS los eventos (sin filtro de peak hours) ======
     all_events = PerformanceEvent.objects.filter(timestamp__gte=since).annotate(
         device_model_display=Case(
-            When(device_model__isnull=True, then=Value("Other (Chrome, Desktop)")),
+            When(device_model__isnull=True, then=Value(
+                "Other (Chrome, Desktop)")),
             When(device_model__exact='', then=Value("Other (Chrome, Desktop)")),
             default=F('device_model'),
             output_field=CharField()
@@ -230,8 +239,10 @@ def bq2_dashboard(request):
     # resumen
     total_events = all_events.count()
     peak_count = peak_events.count()
-    device_count = peak_events.values('device_model_display').distinct().count()
-    all_device_count = all_events.values('device_model_display').distinct().count()
+    device_count = peak_events.values(
+        'device_model_display').distinct().count()
+    all_device_count = all_events.values(
+        'device_model_display').distinct().count()
 
     overall_startup = (
         peak_events.filter(event_type='app_startup')
@@ -277,6 +288,113 @@ def bq2_dashboard(request):
 
     # se renderiza con las graficas y eso bonito para el analytics persona
     return render(request, 'bq2_dashboard.html', context)
+
+
+def bq1_dashboard(request):
+    """
+    Dashboard for BQ1: crash hotspots by feature/code location.
+    """
+    period, start, end = _extract_period_params(request)
+    since, until, resolved_period = resolve_reporting_window(
+        period=period,
+        start=start,
+        end=end,
+    )
+
+    report = calculate_bq1_crash_hotspot_metric(
+        since=since,
+        until=until,
+        period_label=resolved_period,
+    )
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    top_hotspot = report.get('top_hotspot') or {}
+
+    context = {
+        'selected_period': resolved_period,
+        'period_display': period_label_map.get(resolved_period, resolved_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+        'total_crashes': report.get('total_crashes', 0),
+        'unique_hotspots': report.get('unique_hotspots', 0),
+        'unique_devices': report.get('unique_devices', 0),
+        'unique_os_versions': report.get('unique_os_versions', 0),
+        'top_hotspot_label': top_hotspot.get('label', 'No data yet'),
+        'top_hotspot_count': top_hotspot.get('count', 0),
+        'top_hotspot_share': top_hotspot.get('percentage', 0),
+        'top_hotspot_feature_name': top_hotspot.get('feature_name', 'Unknown feature'),
+        'top_hotspot_code_location': top_hotspot.get('code_location', 'Unknown location'),
+        'top_hotspot_signature': top_hotspot.get('crash_signature', 'Unknown signature'),
+        'hotspot_labels': [item['label'] for item in report.get('top_hotspots', [])],
+        'hotspot_values': [item['count'] for item in report.get('top_hotspots', [])],
+        'device_labels': [item['label'] for item in report.get('device_breakdown', [])],
+        'device_values': [item['count'] for item in report.get('device_breakdown', [])],
+        'os_labels': [item['label'] for item in report.get('os_breakdown', [])],
+        'os_values': [item['count'] for item in report.get('os_breakdown', [])],
+        'feature_labels': [item['label'] for item in report.get('feature_breakdown', [])],
+        'feature_values': [item['count'] for item in report.get('feature_breakdown', [])],
+        'top_hotspot_device_labels': [item['label'] for item in top_hotspot.get('device_breakdown', [])],
+        'top_hotspot_device_values': [item['count'] for item in top_hotspot.get('device_breakdown', [])],
+        'top_hotspot_os_labels': [item['label'] for item in top_hotspot.get('os_breakdown', [])],
+        'top_hotspot_os_values': [item['count'] for item in top_hotspot.get('os_breakdown', [])],
+        'top_hotspots': report.get('top_hotspots', []),
+        'definitions': report.get('definitions', {}),
+    }
+
+    return render(request, 'bq1_dashboard.html', context)
+
+
+class BQ1CrashEventIngestionAPIView(APIView):
+    authentication_classes = (
+        JWTIngestionAuthentication,
+        ApiKeyAuthentication,
+        StaticTokenAuthentication,
+    )
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        serializer = CrashEventIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = ingest_crash_event(serializer.validated_data)
+
+        return Response(
+            {
+                'status': 'ok',
+                'event_id': event.pk,
+                'event_name': event.event_name,
+                'feature_name': event.feature_name,
+                'code_location': event.code_location,
+                'crash_signature': event.crash_signature,
+                'occurred_at': event.occurred_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BQ1CrashHotspotAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        period, start, end = _extract_period_params(request)
+        since, until, resolved_period = resolve_reporting_window(
+            period=period,
+            start=start,
+            end=end,
+        )
+
+        report = calculate_bq1_crash_hotspot_metric(
+            since=since,
+            until=until,
+            period_label=resolved_period,
+        )
+        return Response(report, status=status.HTTP_200_OK)
 
 
 def performance_summary_api(request):
@@ -479,7 +597,8 @@ def bq12_dashboard(request):
 
     date_from = (request.GET.get('from') or '2026-01-01').strip()
     date_to = (request.GET.get('to') or '2026-12-31').strip()
-    university_code = (request.GET.get('university_code') or 'UNIANDES').strip().upper()
+    university_code = (request.GET.get('university_code')
+                       or 'UNIANDES').strip().upper()
 
     base_url = getattr(
         settings,
@@ -514,7 +633,8 @@ def bq12_dashboard(request):
     phase_totals = {}
 
     # Build a period x faculty matrix for listings_created.
-    listings_matrix = {faculty: {period: 0 for period in period_set} for faculty in faculty_set}
+    listings_matrix = {faculty: {period: 0 for period in period_set}
+                       for faculty in faculty_set}
 
     total_listings = 0
     total_transactions = 0
@@ -553,7 +673,8 @@ def bq12_dashboard(request):
         rate = (transactions_count / listings_count) if listings_count else 0
         phase_conversion_rates.append(round(rate * 100, 2))
 
-    overall_conversion_rate = (total_transactions / total_listings) if total_listings else 0
+    overall_conversion_rate = (
+        total_transactions / total_listings) if total_listings else 0
 
     context = {
         'selected_grain': grain,
@@ -731,8 +852,8 @@ def _extract_period_params(request):
             raise ValidationError(
                 'custom period requires start and end query params in ISO-8601 format.')
 
-        start = parse_datetime(start_raw)
-        end = parse_datetime(end_raw)
+        start = parse_datetime(str(start_raw))
+        end = parse_datetime(str(end_raw))
 
         if not start or not end:
             raise ValidationError(
@@ -831,8 +952,8 @@ class BQ3SearchToInteractionAPIView(APIView):
         start_raw = request.GET.get('start')
         end_raw = request.GET.get('end')
 
-        start = parse_datetime(start_raw) if start_raw else None
-        end = parse_datetime(end_raw) if end_raw else None
+        start = parse_datetime(str(start_raw)) if start_raw else None
+        end = parse_datetime(str(end_raw)) if end_raw else None
 
         if start_raw and start is None:
             raise ValidationError({'start': 'Invalid ISO datetime.'})
@@ -855,6 +976,48 @@ class BQ3SearchToInteractionAPIView(APIView):
         return Response(report, status=status.HTTP_200_OK)
 
 
+class BQ6MessagingResponseEventIngestionAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        serializer = MessagingResponseEventIngestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = ingest_messaging_response_event(serializer.validated_data)
+
+        return Response(
+            {
+                'status': 'ok',
+                'event_id': event.pk,
+                'event_name': event.event_name,
+                'user_id': event.user_id,
+                'seller_id': event.seller_id,
+                'timestamp': event.timestamp,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BQ6SellerResponseTimeAPIView(APIView):
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        period, start, end = _extract_period_params(request)
+        since, until, resolved_period = resolve_reporting_window(
+            period=period,
+            start=start,
+            end=end,
+        )
+
+        report = calculate_bq6_seller_response_time_metric(
+            since=since,
+            until=until,
+            period_label=resolved_period,
+        )
+        return Response(report, status=status.HTTP_200_OK)
+
+
 @csrf_exempt
 def legacy_events_endpoint(request):
     """
@@ -864,7 +1027,7 @@ def legacy_events_endpoint(request):
     """
     if request.method != 'POST':
         return JsonResponse({'status': 'POST required'}, status=405)
-    
+
     try:
         data = json.loads(request.body)
         event_name = data.get('event_name', 'unknown')
@@ -889,42 +1052,43 @@ def legacy_events_endpoint(request):
                 'saved': True,
                 'target': 'business_events',
             }, status=201)
-        
+
         # Parse timestamp
         timestamp_str = properties.get('timestamp')
         if timestamp_str:
             try:
-                timestamp = timezone.datetime.fromtimestamp(int(timestamp_str) / 1000, tz=timezone.utc)
-            except:
+                timestamp = datetime.fromtimestamp(
+                    int(timestamp_str) / 1000, tz=dt_timezone.utc)
+            except (TypeError, ValueError, OSError, OverflowError):
                 timestamp = timezone.now()
         else:
             timestamp = timezone.now()
-        
+
         # Import the model here to avoid circular imports
         from marketplace_analytics.models import MessagingResponseEvent
-        
+
         # Extract BQ4-specific fields
         seller_id = properties.get('seller_id')
         if seller_id:
             try:
                 seller_id = int(seller_id)
-            except:
+            except (TypeError, ValueError):
                 seller_id = None
-        
+
         avg_minutes = properties.get('avg_minutes')
         if avg_minutes:
             try:
                 avg_minutes = float(avg_minutes)
-            except:
+            except (TypeError, ValueError):
                 avg_minutes = None
-        
+
         unread_count = properties.get('unread_conversations')
         if unread_count:
             try:
                 unread_count = int(unread_count)
-            except:
+            except (TypeError, ValueError):
                 unread_count = None
-        
+
         # Save to database
         MessagingResponseEvent.objects.create(
             event_name=event_name,
@@ -935,14 +1099,14 @@ def legacy_events_endpoint(request):
             timestamp=timestamp,
             properties=properties
         )
-        
+
         return JsonResponse({
             'status': 'ok',
             'event_name': event_name,
             'user_id': user_id,
             'saved': True
         }, status=201)
-        
+
     except json.JSONDecodeError:
         return JsonResponse({'status': 'Invalid JSON'}, status=400)
     except Exception as e:
@@ -954,8 +1118,8 @@ def bq3_dashboard(request):
     start_raw = request.GET.get('start')
     end_raw = request.GET.get('end')
 
-    start = parse_datetime(start_raw) if start_raw else None
-    end = parse_datetime(end_raw) if end_raw else None
+    start = parse_datetime(str(start_raw)) if start_raw else None
+    end = parse_datetime(str(end_raw)) if end_raw else None
 
     if start_raw and start is None:
         raise ValidationError({'start': 'Invalid ISO datetime.'})
@@ -1015,6 +1179,65 @@ def bq3_dashboard(request):
     return render(request, 'bq3_dashboard.html', context)
 
 
+def bq6_dashboard(request):
+    period, start, end = _extract_period_params(request)
+    since, until, resolved_period = resolve_reporting_window(
+        period=period,
+        start=start,
+        end=end,
+    )
+
+    report = calculate_bq6_seller_response_time_metric(
+        since=since,
+        until=until,
+        period_label=resolved_period,
+    )
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    distribution = report.get('distribution_buckets', {})
+    top_fastest = report.get('top_fastest_sellers', [])
+    slowest = report.get('slowest_sellers', [])
+    daily_trend = report.get('daily_trend', [])
+
+    context = {
+        'selected_period': resolved_period,
+        'period_display': period_label_map.get(resolved_period, resolved_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+        'total_measurements': report.get('total_measurements', 0),
+        'avg_response_minutes': round(report.get('avg_response_minutes') or 0, 1),
+        'median_response_minutes': round(report.get('median_response_minutes') or 0, 1),
+        'p90_response_minutes': round(report.get('p90_response_minutes') or 0, 1),
+        'min_response_minutes': round(report.get('min_response_minutes') or 0, 1),
+        'max_response_minutes': round(report.get('max_response_minutes') or 0, 1),
+        'messages_screen_opened': report.get('messages_screen_opened', 0),
+        'messages_sent': report.get('messages_sent', 0),
+        'avg_unread_conversations': round(report.get('avg_unread_conversations') or 0, 1),
+        'fastest_seller_labels': [f"Seller {item['seller_id']}" for item in top_fastest],
+        'fastest_seller_values': [round(item['avg_response_minutes'] or 0, 1) for item in top_fastest],
+        'slowest_seller_labels': [f"Seller {item['seller_id']}" for item in slowest],
+        'slowest_seller_values': [round(item['avg_response_minutes'] or 0, 1) for item in slowest],
+        'daily_labels': [item['date'].strftime('%b %d') for item in daily_trend],
+        'daily_values': [round(item['avg_response_minutes'] or 0, 1) for item in daily_trend],
+        'distribution_labels': ['< 5 min', '5-30 min', '30-120 min', '> 120 min'],
+        'distribution_values': [
+            distribution.get('under_5_min', 0),
+            distribution.get('from_5_to_30_min', 0),
+            distribution.get('from_30_to_120_min', 0),
+            distribution.get('over_120_min', 0),
+        ],
+        'top_fastest_rows': top_fastest,
+    }
+
+    return render(request, 'bq6_dashboard.html', context)
+
+
 def bq4_dashboard(request):
     """
     Dashboard for BQ4: Average seller response time after buyer initiates contact.
@@ -1022,17 +1245,17 @@ def bq4_dashboard(request):
     """
     from marketplace_analytics.models import MessagingResponseEvent
     from django.db.models import Avg, Count, Min, Max
-    
+
     # Get time range (last 30 days by default)
     since = timezone.now() - timedelta(days=30)
-    
+
     # Get all response time events
     response_events = MessagingResponseEvent.objects.filter(
         event_name='seller_avg_response_time',
         timestamp__gte=since,
         avg_response_minutes__isnull=False
     )
-    
+
     # Overall statistics
     overall_stats = response_events.aggregate(
         avg_response=Avg('avg_response_minutes'),
@@ -1040,7 +1263,7 @@ def bq4_dashboard(request):
         max_response=Max('avg_response_minutes'),
         total_measurements=Count('id')
     )
-    
+
     # Response time by seller
     by_seller = list(
         response_events.values('seller_id')
@@ -1050,22 +1273,23 @@ def bq4_dashboard(request):
         )
         .order_by('avg_response')[:10]  # Top 10 fastest sellers
     )
-    
+
     # Messages screen activity
     messages_opened = MessagingResponseEvent.objects.filter(
         event_name='messages_screen_opened',
         timestamp__gte=since
     )
-    
+
     total_opens = messages_opened.count()
-    avg_unread = messages_opened.aggregate(avg=Avg('unread_conversations'))['avg'] or 0
-    
+    avg_unread = messages_opened.aggregate(
+        avg=Avg('unread_conversations'))['avg'] or 0
+
     # Message sent activity
     messages_sent = MessagingResponseEvent.objects.filter(
         event_name='message_sent',
         timestamp__gte=since
     ).count()
-    
+
     # Daily trend
     daily_response_times = list(
         response_events.annotate(date=TruncDate('timestamp'))
@@ -1073,32 +1297,141 @@ def bq4_dashboard(request):
         .annotate(avg_response=Avg('avg_response_minutes'))
         .order_by('date')
     )
-    
+
     # Response time distribution (buckets)
     fast_responses = response_events.filter(avg_response_minutes__lt=5).count()
-    medium_responses = response_events.filter(avg_response_minutes__gte=5, avg_response_minutes__lt=30).count()
-    slow_responses = response_events.filter(avg_response_minutes__gte=30).count()
-    
+    medium_responses = response_events.filter(
+        avg_response_minutes__gte=5, avg_response_minutes__lt=30).count()
+    slow_responses = response_events.filter(
+        avg_response_minutes__gte=30).count()
+
     context = {
         'period_display': 'Last 30 Days',
         'total_measurements': overall_stats['total_measurements'] or 0,
         'avg_response_minutes': round(overall_stats['avg_response'] or 0, 1),
         'min_response_minutes': round(overall_stats['min_response'] or 0, 1),
         'max_response_minutes': round(overall_stats['max_response'] or 0, 1),
-        
+
         'total_messages_opened': total_opens,
         'avg_unread_conversations': round(avg_unread, 1),
         'total_messages_sent': messages_sent,
-        
+
         'seller_labels': [f"Seller {s['seller_id']}" for s in by_seller],
         'seller_response_times': [round(s['avg_response'], 1) for s in by_seller],
         'seller_measurements': [s['measurements'] for s in by_seller],
-        
+
         'daily_labels': [d['date'].strftime('%b %d') for d in daily_response_times],
         'daily_values': [round(d['avg_response'], 1) for d in daily_response_times],
-        
+
         'distribution_labels': ['< 5 min', '5-30 min', '> 30 min'],
         'distribution_values': [fast_responses, medium_responses, slow_responses],
     }
-    
+
     return render(request, 'bq4_dashboard.html', context)
+
+
+def bq5_dashboard(request):
+    """
+    Dashboard for BQ5: most reliable sellers from buyer perspective.
+    Reliability score = 0.4 * avg_rating + 0.4 * completion_rate + 0.2 * speed_score
+    speed_score = 1 - (avg_response_minutes / 480) clamped to [0, 1]
+    """
+    from marketplace_analytics.models import AnalyticsEvent
+
+    events_qs = AnalyticsEvent.objects.filter(
+        event_name=AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        metadata__seeded_bq5=True,
+    )
+
+    all_events_list = list(events_qs.values(
+        'metadata', 'seller_user_id', 'occurred_at'))
+
+    seller_stats = {}
+
+    for e in all_events_list:
+        meta = e.get('metadata') or {}
+        seller_id = e.get('seller_user_id') or meta.get('seller_id')
+        if not seller_id:
+            continue
+
+        seller_id = str(seller_id)
+        if seller_id not in seller_stats:
+            seller_stats[seller_id] = {'ratings': [],
+                                       'response_times': [], 'transactions': 0}
+
+        seller_stats[seller_id]['transactions'] += 1
+
+        rating = meta.get('rating')
+        if rating is not None:
+            seller_stats[seller_id]['ratings'].append(float(rating))
+
+        rt = meta.get('response_time_minutes')
+        if rt is not None:
+            seller_stats[seller_id]['response_times'].append(float(rt))
+
+    max_transactions = max((v['transactions']
+                           for v in seller_stats.values()), default=1)
+    seller_scores = []
+
+    for seller_id, stats in seller_stats.items():
+        avg_rating = sum(stats['ratings']) / \
+            len(stats['ratings']) if stats['ratings'] else 0
+        avg_response = sum(stats['response_times']) / \
+            len(stats['response_times']) if stats['response_times'] else 240
+        speed_score = max(0.0, 1.0 - (avg_response / 480.0))
+
+        txn_score = stats['transactions'] / max_transactions
+
+        score = round(
+            (avg_rating / 5.0) * 0.4 +
+            txn_score * 0.4 +
+            speed_score * 0.2,
+            4
+        )
+        seller_scores.append({
+            'seller_id':       seller_id,
+            'score':           round(score * 100, 1),
+            'avg_rating':      round(avg_rating, 2),
+            'avg_response_min': round(avg_response, 1),
+            'transactions':    stats['transactions'],
+        })
+
+    seller_scores.sort(key=lambda x: -x['score'])
+    top_sellers = seller_scores[:15]
+
+    score_buckets = {'0-20': 0, '21-40': 0,
+                     '41-60': 0, '61-80': 0, '81-100': 0}
+    for s in seller_scores:
+        sc = s['score']
+        if sc <= 20:
+            score_buckets['0-20'] += 1
+        elif sc <= 40:
+            score_buckets['21-40'] += 1
+        elif sc <= 60:
+            score_buckets['41-60'] += 1
+        elif sc <= 80:
+            score_buckets['61-80'] += 1
+        else:
+            score_buckets['81-100'] += 1
+
+    total_sellers = len(seller_scores)
+    total_transactions = sum(s['transactions'] for s in seller_scores)
+    avg_score = round(sum(s['score'] for s in seller_scores) /
+                      total_sellers, 1) if total_sellers else 0
+    avg_rating_overall = round(sum(
+        s['avg_rating'] for s in seller_scores) / total_sellers, 2) if total_sellers else 0
+
+    context = {
+        'total_sellers':       total_sellers,
+        'total_transactions':  total_transactions,
+        'avg_score':           avg_score,
+        'avg_rating_overall':  avg_rating_overall,
+        'top_sellers':         top_sellers,
+        'seller_labels': json.dumps([f"S-{s['seller_id'][-4:]}" for s in top_sellers[:10]]),
+        'seller_scores': json.dumps([s['score'] for s in top_sellers[:10]]),
+        'seller_ratings':      json.dumps([s['avg_rating'] for s in top_sellers[:10]]),
+        'seller_responses':    json.dumps([s['avg_response_min'] for s in top_sellers[:10]]),
+        'dist_labels':         json.dumps(list(score_buckets.keys())),
+        'dist_values':         json.dumps(list(score_buckets.values())),
+    }
+    return render(request, 'bq5_dashboard.html', context)

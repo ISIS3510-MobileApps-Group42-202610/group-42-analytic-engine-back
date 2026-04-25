@@ -3,8 +3,10 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
+from marketplace_analytics.models import CrashEvent
 from marketplace_analytics.models import AnalyticsEvent
 from marketplace_analytics.models import SearchDiscoveryEvent
+from marketplace_analytics.models import MessagingResponseEvent
 
 
 class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
@@ -80,6 +82,62 @@ class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class CrashEventIngestSerializer(serializers.ModelSerializer):
+    timestamp = serializers.DateTimeField(source='occurred_at', required=False)
+
+    class Meta:
+        model = CrashEvent
+        fields = [
+            'event_name',
+            'feature_name',
+            'code_location',
+            'crash_signature',
+            'stack_trace',
+            'device_model',
+            'platform',
+            'os_version',
+            'app_version',
+            'timestamp',
+            'metadata',
+            'client_event_id',
+        ]
+
+    def validate_metadata(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('metadata must be a JSON object.')
+        return value
+
+    def validate(self, attrs):
+        if 'metadata' not in attrs or attrs['metadata'] is None:
+            attrs['metadata'] = {}
+
+        if 'occurred_at' not in attrs:
+            attrs['occurred_at'] = timezone.now()
+
+        if attrs['occurred_at'] > timezone.now() + timedelta(minutes=5):
+            raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        feature_name = (attrs.get('feature_name') or '').strip()
+        code_location = (attrs.get('code_location') or '').strip()
+        crash_signature = (attrs.get('crash_signature') or '').strip()
+
+        if not crash_signature:
+            raise serializers.ValidationError('crash_signature is required.')
+
+        if not feature_name and not code_location:
+            raise serializers.ValidationError(
+                'Either feature_name or code_location must be provided.'
+            )
+
+        attrs['feature_name'] = feature_name
+        attrs['code_location'] = code_location
+        attrs['crash_signature'] = crash_signature
+
+        return attrs
+
+
 class SearchDiscoveryEventIngestSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(source='occurred_at', required=False)
 
@@ -149,5 +207,77 @@ class SearchDiscoveryEventIngestSerializer(serializers.ModelSerializer):
 
         if attrs['occurred_at'] > timezone.now() + timedelta(minutes=5):
             raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        return attrs
+
+
+class MessagingResponseEventIngestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessagingResponseEvent
+        fields = [
+            'event_name',
+            'user_id',
+            'seller_id',
+            'avg_response_minutes',
+            'unread_conversations',
+            'timestamp',
+            'properties',
+        ]
+
+    def validate_properties(self, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('properties must be a JSON object.')
+        return value
+
+    def validate(self, attrs):
+        event_name = attrs.get('event_name')
+        seller_id = attrs.get('seller_id')
+        avg_response_minutes = attrs.get('avg_response_minutes')
+        unread_conversations = attrs.get('unread_conversations')
+        timestamp = attrs.get('timestamp')
+
+        if 'properties' not in attrs or attrs['properties'] is None:
+            attrs['properties'] = {}
+
+        if timestamp is None:
+            attrs['timestamp'] = timezone.now()
+
+        if attrs['timestamp'] > timezone.now() + timedelta(minutes=5):
+            raise serializers.ValidationError('timestamp cannot be far in the future.')
+
+        response_metric_events = {
+            MessagingResponseEvent.EventName.SELLER_AVG_RESPONSE_TIME,
+        }
+
+        contact_events = {
+            MessagingResponseEvent.EventName.MESSAGE_SENT,
+            MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT,
+        }
+
+        if event_name in response_metric_events:
+            if seller_id is None:
+                raise serializers.ValidationError(
+                    'seller_avg_response_time requires seller_id.'
+                )
+            if avg_response_minutes is None:
+                raise serializers.ValidationError(
+                    'seller_avg_response_time requires avg_response_minutes.'
+                )
+            if avg_response_minutes < 0:
+                raise serializers.ValidationError(
+                    'avg_response_minutes must be greater than or equal to 0.'
+                )
+
+        if event_name in contact_events and seller_id is None:
+            raise serializers.ValidationError(
+                f'{event_name} requires seller_id.'
+            )
+
+        if unread_conversations is not None and unread_conversations < 0:
+            raise serializers.ValidationError(
+                'unread_conversations must be greater than or equal to 0.'
+            )
 
         return attrs

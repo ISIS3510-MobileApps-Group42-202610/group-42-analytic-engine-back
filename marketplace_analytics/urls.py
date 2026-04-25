@@ -1,8 +1,10 @@
 from django.urls import path
 
 from marketplace_analytics.views import (
+    bq1_dashboard,
     bq11_dashboard,
-     bq12_dashboard,
+    bq12_dashboard,
+    bq5_dashboard,
     post_performance_event,
     bq2_dashboard,
     q9_dashboard,
@@ -14,11 +16,22 @@ from marketplace_analytics.views import (
     bq3_dashboard,
     legacy_events_endpoint,
     bq4_dashboard,
+    bq6_dashboard,
+    BQ6MessagingResponseEventIngestionAPIView,
+    BQ6SellerResponseTimeAPIView,
+    BQ1CrashEventIngestionAPIView,
+    BQ1CrashHotspotAPIView,
 )
 
 urlpatterns = [
     # ====== Legacy endpoint for Android AnalyticsLogger ==========
     path('events', legacy_events_endpoint, name='legacy-events'),
+    # ====== BQ1 Crash Hotspots ==========
+    path('api/bq1/events/', BQ1CrashEventIngestionAPIView.as_view(),
+         name='bq1-event-ingestion'),
+    path('api/reports/bq1-crash-hotspots/',
+         BQ1CrashHotspotAPIView.as_view(), name='bq1-crash-hotspots'),
+    path('api/dashboard/bq1', bq1_dashboard, name='bq1-dashboard'),
     # ====== Performance BQ2 ==========
     path('api/performance', post_performance_event, name='performance-event'),
     path('api/performance-summary/', performance_summary_api,
@@ -38,5 +51,19 @@ urlpatterns = [
     path('api/dashboard/bq3', bq3_dashboard, name='bq3-dashboard'),
     path('api/dashboard/bq4', bq4_dashboard, name='bq4-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
-     path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
+    path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
+
+    # ====== BQ6 Messaging Response Time ==========
+
+    path('api/bq6/events/', BQ6MessagingResponseEventIngestionAPIView.as_view(),
+         name='bq6-event-ingestion'),
+    path('api/reports/bq6-seller-response-time/',
+         BQ6SellerResponseTimeAPIView.as_view(), name='bq6-seller-response-time'),
+    path('api/dashboard/bq6', bq6_dashboard, name='bq6-dashboard'),
+
+    # ====== BQ5 Most Reliable Sellers ==========
+    path('api/dashboard/bq5', bq5_dashboard, name='bq5-dashboard'),
+
+
+
 ]

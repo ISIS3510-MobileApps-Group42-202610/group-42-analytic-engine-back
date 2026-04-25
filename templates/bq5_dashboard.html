@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}BQ5: Seller Reliability Ranking{% endblock %}
+{% block nav_bq5 %}active{% endblock %}
+
+{% block content %}
+
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question (BQ5 - Type 2)</h3>
+        <p>
+            Which sellers are perceived as the most reliable from a buyer's perspective?
+            Measured using a composite reliability score (Rating 40%, Volume 40%, Response 20%).
+        </p>
+    </div>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+</div>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Total Sellers Tracked</div>
+        <div class="value">{{ total_sellers }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Total Transactions</div>
+        <div class="value">{{ total_transactions }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Reliability Score</div>
+        <div class="value">{{ avg_score }} <span class="unit">/ 100</span></div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Rating Overall</div>
+        <div class="value">{{ avg_rating_overall }} <span class="unit">/ 5</span></div>
+    </div>
+</div>
+
+{% if total_sellers == 0 %}
+<div class="methodology-box">
+    <h3>No data available</h3>
+    <p>Run <code>python manage.py seed_bq5_data</code> to populate the ranking.</p>
+</div>
+{% else %}
+
+<div class="chart-box full" style="margin-top: 20px;">
+    <h3>Seller Reliability Ranking</h3>
+    <div style="overflow-x: auto; margin-top: 12px;">
+        <table style="width:100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+                <tr style="background: #f3f4f6; text-align: left;">
+                    <th style="padding: 10px 12px;">#</th>
+                    <th style="padding: 10px 12px;">Seller ID</th>
+                    <th style="padding: 10px 12px;">Reliability Score</th>
+                    <th style="padding: 10px 12px;">Avg Rating</th>
+                    <th style="padding: 10px 12px;">Avg Response (min)</th>
+                    <th style="padding: 10px 12px;">Transactions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in top_sellers %}
+                <tr style="border-top: 1px solid #e5e7eb;">
+                    <td style="padding: 10px 12px; font-weight: 700; color: #6b7280;">{{ forloop.counter }}</td>
+                    <td style="padding: 10px 12px; font-weight: 600;">Seller #{{ s.seller_id|slice:"-4:" }}</td>
+                    <td style="padding: 10px 12px;">
+                        {% if s.score >= 80 %}
+                            <span style="font-weight: 700; color: #059669;">{{ s.score }}</span>
+                        {% elif s.score >= 60 %}
+                            <span style="font-weight: 700; color: #d97706;">{{ s.score }}</span>
+                        {% else %}
+                            <span style="font-weight: 700; color: #dc2626;">{{ s.score }}</span>
+                        {% endif %}
+                        <span style="color: #9ca3af;">/100</span>
+                    </td>
+                    <td style="padding: 10px 12px;">{{ s.avg_rating }} ★</td>
+                    <td style="padding: 10px 12px;">{{ s.avg_response_min }} min</td>
+                    <td style="padding: 10px 12px;">{{ s.transactions }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="methodology-box" style="margin-top: 20px;">
+    <h3>Reliability Score Formula</h3>
+    <ul>
+        <li><strong>Avg Rating (40%):</strong> Basado en estrellas recibidas.</li>
+        <li><strong>Volume (40%):</strong> Cantidad de ventas comparadas con el líder.</li>
+        <li><strong>Response (20%):</strong> Eficiencia de tiempo (1 - demora_avg/480).</li>
+    </ul>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% endblock %}

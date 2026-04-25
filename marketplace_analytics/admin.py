@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from marketplace_analytics.models import PerformanceEvent, AnalyticsEvent, ListingAnalyticsState
+from marketplace_analytics.models import PerformanceEvent, CrashEvent, AnalyticsEvent, ListingAnalyticsState
 
 
 @admin.register(PerformanceEvent)
@@ -8,6 +8,22 @@ class PerformanceEventAdmin(admin.ModelAdmin):
 	list_display = ('event_type', 'device_model', 'platform', 'duration_ms', 'timestamp')
 	list_filter = ('event_type', 'platform')
 	search_fields = ('device_model',)
+
+
+@admin.register(CrashEvent)
+class CrashEventAdmin(admin.ModelAdmin):
+	list_display = (
+		'event_name',
+		'feature_name',
+		'code_location',
+		'crash_signature',
+		'device_model',
+		'platform',
+		'os_version',
+		'occurred_at',
+	)
+	list_filter = ('event_name', 'platform', 'os_version')
+	search_fields = ('feature_name', 'code_location', 'crash_signature', 'device_model')
 
 
 @admin.register(AnalyticsEvent)

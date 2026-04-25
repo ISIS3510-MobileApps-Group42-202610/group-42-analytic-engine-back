@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}BQ6: Seller Response Time - Analytics Dashboard{% endblock %}
+{% block nav_bq6 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question 6 (Type 2)</h3>
+    <p>
+        What is the average seller response time after a buyer initiates contact for a listing?
+    </p>
+    <p style="margin-top: 8px;">
+        Measured with messaging response events sent by the client app and aggregated by seller and period.
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq6FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+            <select name="period" id="period">
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>All Time</option>
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>Last 30 Days</option>
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>Semester to Date</option>
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>Custom Range</option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFields">
+            <label for="start">Start</label>
+            <input type="datetime-local" name="start" id="start" value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFieldsEnd">
+            <label for="end">End</label>
+            <input type="datetime-local" name="end" id="end" value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">Current: {{ period_display }}</div>
+</div>
+
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Avg Response Time</div>
+        <div class="value">{{ avg_response_minutes }} <span class="unit">min</span></div>
+        <div class="subline">Average seller response time</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Median Response Time</div>
+        <div class="value">{{ median_response_minutes }} <span class="unit">min</span></div>
+        <div class="subline">Central tendency less sensitive to outliers</div>
+    </div>
+
+    <div class="card">
+        <div class="label">P90 Response Time</div>
+        <div class="value">{{ p90_response_minutes }} <span class="unit">min</span></div>
+        <div class="subline">90% of observed response times are at or below this value</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Total Measurements</div>
+        <div class="value">{{ total_measurements }}</div>
+        <div class="subline">Valid seller response time events</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Messages Screen Opened</div>
+        <div class="value">{{ messages_screen_opened }}</div>
+        <div class="subline">Messaging UI usage</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Messages Sent</div>
+        <div class="value">{{ messages_sent }}</div>
+        <div class="subline">Buyer/seller message activity</div>
+    </div>
+</div>
+
+{% if total_measurements == 0 %}
+<div class="methodology-box">
+    <h3>No BQ6 data available yet</h3>
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+        <li>There are no messaging response events stored yet for the selected period.</li>
+        <li>You need to send events to <strong>/api/bq6/events/</strong> or run the seed command.</li>
+    </ul>
+</div>
+{% else %}
+<div class="charts">
+    <div class="chart-box">
+        <h3>Fastest Sellers by Average Response Time</h3>
+        <canvas id="bq6FastestSellersChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Response Time Distribution</h3>
+        <canvas id="bq6DistributionChart"></canvas>
+    </div>
+
+    <div class="chart-box full">
+        <h3>Daily Average Response Time</h3>
+        <canvas id="bq6DailyTrendChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li>The main metric is based on <code>seller_avg_response_time</code> events ingested from the client.</li>
+        <li>Average response time is measured in minutes.</li>
+        <li>Median helps describe the typical case without being dominated by very slow outliers.</li>
+        <li>P90 shows the upper bound experienced by most users.</li>
+    </ul>
+</div>
+
+<div class="chart-box full">
+    <h3>Top Fastest Sellers</h3>
+    <div style="overflow-x: auto;">
+        <table class="analytics-table">
+            <thead>
+                <tr>
+                    <th>Seller</th>
+                    <th>Avg Response (min)</th>
+                    <th>Measurements</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in top_fastest_rows %}
+                <tr>
+                    <td>{{ item.seller_id }}</td>
+                    <td>{{ item.avg_response_minutes|floatformat:1 }}</td>
+                    <td>{{ item.measurements }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="3">No seller measurements available.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{{ fastest_seller_labels|json_script:"bq6-fastest-seller-labels" }}
+{{ fastest_seller_values|json_script:"bq6-fastest-seller-values" }}
+{{ distribution_labels|json_script:"bq6-distribution-labels" }}
+{{ distribution_values|json_script:"bq6-distribution-values" }}
+{{ daily_labels|json_script:"bq6-daily-labels" }}
+{{ daily_values|json_script:"bq6-daily-values" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodSelect = document.getElementById('period');
+    const customStart = document.getElementById('customRangeFields');
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    if (periodSelect) {
+        periodSelect.addEventListener('change', function () {
+            const show = this.value === 'custom';
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    const fastestSellerLabelsEl = document.getElementById('bq6-fastest-seller-labels');
+    const fastestSellerValuesEl = document.getElementById('bq6-fastest-seller-values');
+    const distributionLabelsEl = document.getElementById('bq6-distribution-labels');
+    const distributionValuesEl = document.getElementById('bq6-distribution-values');
+    const dailyLabelsEl = document.getElementById('bq6-daily-labels');
+    const dailyValuesEl = document.getElementById('bq6-daily-values');
+
+    if (
+        fastestSellerLabelsEl && fastestSellerValuesEl &&
+        distributionLabelsEl && distributionValuesEl &&
+        dailyLabelsEl && dailyValuesEl
+    ) {
+        const fastestSellerLabels = JSON.parse(fastestSellerLabelsEl.textContent);
+        const fastestSellerValues = JSON.parse(fastestSellerValuesEl.textContent);
+        const distributionLabels = JSON.parse(distributionLabelsEl.textContent);
+        const distributionValues = JSON.parse(distributionValuesEl.textContent);
+        const dailyLabels = JSON.parse(dailyLabelsEl.textContent);
+        const dailyValues = JSON.parse(dailyValuesEl.textContent);
+
+        createBarChart(
+            'bq6FastestSellersChart',
+            fastestSellerLabels,
+            fastestSellerValues,
+            'Avg Response (min)'
+        );
+
+        createBarChart(
+            'bq6DistributionChart',
+            distributionLabels,
+            distributionValues,
+            'Measurements'
+        );
+
+        createLineChart(
+            'bq6DailyTrendChart',
+            dailyLabels,
+            dailyValues,
+            'Avg Response (min)'
+        );
+    }
+</script>
+{% endblock %}

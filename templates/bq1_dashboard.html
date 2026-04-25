@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+
+{% block title %}BQ1: Crash Hotspots - Analytics Dashboard{% endblock %}
+{% block nav_bq1 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question (BQ1 – Type 1)</h3>
+        <p>
+            Which is the code location or specific feature where the UniMarket app most frequently crashes,
+            and how does the crash concentration vary across different devices and OS versions?
+        </p>
+        <p style="margin-top: 8px;">
+            Measured using crash telemetry, stack traces, feature/code-location metadata, device model, and OS version.
+        </p>
+    </div>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq1FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+            <select name="period" id="period">
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>All Time</option>
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>Last 30 Days</option>
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>Semester to Date</option>
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>Custom Range</option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFields">
+            <label for="start">Start</label>
+            <input type="datetime-local" name="start" id="start" value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customRangeFieldsEnd">
+            <label for="end">End</label>
+            <input type="datetime-local" name="end" id="end" value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">Current: {{ period_display }}</div>
+</div>
+
+<!-- Full-width top hotspot banner — owns its own row so the label has room -->
+<div class="hotspot-banner">
+    <div class="hotspot-banner-left">
+        <div class="label">Top Crash Hotspot</div>
+        <code class="hotspot-location" title="{{ top_hotspot_label }}">{{ top_hotspot_label }}</code>
+    </div>
+    <div class="hotspot-banner-right">
+        <div class="value">{{ top_hotspot_count }}</div>
+        <div class="subline">crashes</div>
+    </div>
+</div>
+
+<!-- Stat cards (highlight card removed — now shown in banner above) -->
+<div class="cards">
+    <div class="card">
+        <div class="label">Top Hotspot Share</div>
+        <div class="value">{{ top_hotspot_share }} <span class="unit">%</span></div>
+        <div class="subline">Share of crash reports in the selected period</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Total Crash Reports</div>
+        <div class="value">{{ total_crashes }}</div>
+        <div class="subline">Ingested crash telemetry events</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Unique Hotspots</div>
+        <div class="value">{{ unique_hotspots }}</div>
+        <div class="subline">Distinct code locations / features / signatures</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Device Models</div>
+        <div class="value">{{ unique_devices }}</div>
+        <div class="subline">Distinct devices represented in crash logs</div>
+    </div>
+
+    <div class="card">
+        <div class="label">OS Versions</div>
+        <div class="value">{{ unique_os_versions }}</div>
+        <div class="subline">Distinct OS versions represented in crash logs</div>
+    </div>
+</div>
+
+{% if total_crashes == 0 %}
+<div class="methodology-box">
+    <h3>No BQ1 data available yet</h3>
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+        <li>There are no crash telemetry events stored yet for the selected period.</li>
+        <li>Send events to <strong>/api/bq1/events/</strong> or seed sample crash data.</li>
+    </ul>
+</div>
+{% else %}
+<div class="charts">
+    <div class="chart-box full">
+        <h3>Top Crash Hotspots</h3>
+        <canvas id="hotspotChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Crash Reports by Device Model</h3>
+        <canvas id="deviceChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Crash Reports by OS Version</h3>
+        <canvas id="osChart"></canvas>
+    </div>
+
+    <div class="chart-box full">
+        <h3>Crash Reports by Feature</h3>
+        <canvas id="featureChart"></canvas>
+    </div>
+</div>
+
+<div class="chart-box full">
+    <h3>Top Hotspots Detail</h3>
+    <div style="overflow-x: auto;">
+        <table class="analytics-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Feature</th>
+                    <th>Code Location</th>
+                    <th>Signature</th>
+                    <th style="text-align:right;">Count</th>
+                    <th style="text-align:right;">Share</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in top_hotspots %}
+                <tr>
+                    <td>{{ forloop.counter }}</td>
+                    <td>{{ item.feature_name|default:"—" }}</td>
+                    <td class="col-wrap">
+                        {% if item.code_location %}
+                            <code class="code-chip" title="{{ item.code_location }}">{{ item.code_location }}</code>
+                        {% else %}
+                            <span style="color:#9ca3af;">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="col-wrap">
+                        <span class="crash-sig" title="{{ item.crash_signature }}">{{ item.crash_signature }}</span>
+                    </td>
+                    <td style="text-align:right; font-weight:600;">{{ item.count }}</td>
+                    <td style="text-align:right;">{{ item.percentage }}%</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" style="color:#9ca3af; text-align:center; padding:24px;">
+                        No crash hotspots available.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="chart-box full">
+    <h3>Top Hotspot Breakdown</h3>
+    <div class="charts">
+        <div class="chart-box">
+            <h3>By Device Model</h3>
+            <canvas id="topHotspotDeviceChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>By OS Version</h3>
+            <canvas id="topHotspotOsChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li>The hotspot label uses <code>code_location</code> first, then <code>feature_name</code>, then <code>crash_signature</code>.</li>
+        <li>Percentages represent the share of crash reports, not an exposure-adjusted crash rate.</li>
+        <li>When device or OS metadata is missing, the dashboard groups those records under <code>Unknown device</code> or <code>Unknown OS</code>.</li>
+        <li>The breakdown tables help pinpoint whether one crash hotspot is isolated to a specific device family or OS release.</li>
+    </ul>
+</div>
+
+{{ hotspot_labels|json_script:"bq1-hotspot-labels" }}
+{{ hotspot_values|json_script:"bq1-hotspot-values" }}
+{{ device_labels|json_script:"bq1-device-labels" }}
+{{ device_values|json_script:"bq1-device-values" }}
+{{ os_labels|json_script:"bq1-os-labels" }}
+{{ os_values|json_script:"bq1-os-values" }}
+{{ feature_labels|json_script:"bq1-feature-labels" }}
+{{ feature_values|json_script:"bq1-feature-values" }}
+{{ top_hotspot_device_labels|json_script:"bq1-top-hotspot-device-labels" }}
+{{ top_hotspot_device_values|json_script:"bq1-top-hotspot-device-values" }}
+{{ top_hotspot_os_labels|json_script:"bq1-top-hotspot-os-labels" }}
+{{ top_hotspot_os_values|json_script:"bq1-top-hotspot-os-values" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodSelect = document.getElementById('period');
+    const customStart = document.getElementById('customRangeFields');
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    if (periodSelect) {
+        periodSelect.addEventListener('change', function () {
+            const show = this.value === 'custom';
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    const hotspotLabelsEl = document.getElementById('bq1-hotspot-labels');
+    const hotspotValuesEl = document.getElementById('bq1-hotspot-values');
+    const deviceLabelsEl = document.getElementById('bq1-device-labels');
+    const deviceValuesEl = document.getElementById('bq1-device-values');
+    const osLabelsEl = document.getElementById('bq1-os-labels');
+    const osValuesEl = document.getElementById('bq1-os-values');
+    const featureLabelsEl = document.getElementById('bq1-feature-labels');
+    const featureValuesEl = document.getElementById('bq1-feature-values');
+    const topHotspotDeviceLabelsEl = document.getElementById('bq1-top-hotspot-device-labels');
+    const topHotspotDeviceValuesEl = document.getElementById('bq1-top-hotspot-device-values');
+    const topHotspotOsLabelsEl = document.getElementById('bq1-top-hotspot-os-labels');
+    const topHotspotOsValuesEl = document.getElementById('bq1-top-hotspot-os-values');
+
+    if (
+        hotspotLabelsEl && hotspotValuesEl &&
+        deviceLabelsEl && deviceValuesEl &&
+        osLabelsEl && osValuesEl &&
+        featureLabelsEl && featureValuesEl &&
+        topHotspotDeviceLabelsEl && topHotspotDeviceValuesEl &&
+        topHotspotOsLabelsEl && topHotspotOsValuesEl
+    ) {
+        const hotspotLabels = JSON.parse(hotspotLabelsEl.textContent);
+        const hotspotValues = JSON.parse(hotspotValuesEl.textContent);
+        const deviceLabels = JSON.parse(deviceLabelsEl.textContent);
+        const deviceValues = JSON.parse(deviceValuesEl.textContent);
+        const osLabels = JSON.parse(osLabelsEl.textContent);
+        const osValues = JSON.parse(osValuesEl.textContent);
+        const featureLabels = JSON.parse(featureLabelsEl.textContent);
+        const featureValues = JSON.parse(featureValuesEl.textContent);
+        const topHotspotDeviceLabels = JSON.parse(topHotspotDeviceLabelsEl.textContent);
+        const topHotspotDeviceValues = JSON.parse(topHotspotDeviceValuesEl.textContent);
+        const topHotspotOsLabels = JSON.parse(topHotspotOsLabelsEl.textContent);
+        const topHotspotOsValues = JSON.parse(topHotspotOsValuesEl.textContent);
+
+        createBarChart('hotspotChart', hotspotLabels, hotspotValues, 'Crash Reports', 'Crash Reports');
+        createBarChart('deviceChart', deviceLabels, deviceValues, 'Crash Reports', 'Crash Reports');
+        createBarChart('osChart', osLabels, osValues, 'Crash Reports', 'Crash Reports');
+        createBarChart('featureChart', featureLabels, featureValues, 'Crash Reports', 'Crash Reports');
+        createBarChart('topHotspotDeviceChart', topHotspotDeviceLabels, topHotspotDeviceValues, 'Crash Reports', 'Crash Reports');
+        createBarChart('topHotspotOsChart', topHotspotOsLabels, topHotspotOsValues, 'Crash Reports', 'Crash Reports');
+    }
+</script>
+{% endblock %}
+
+
