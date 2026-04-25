@@ -6,7 +6,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from collections import defaultdict
 from statistics import median
-from typing import Iterable, cast
+from typing import Iterable, TypedDict, cast
 
 from marketplace_analytics.models import CrashEvent, AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
 
@@ -433,7 +433,14 @@ def calculate_bq3_search_to_interaction_metric(
     completed_sessions = []
     elapsed_seconds = []
 
-    breakdown: dict[str, dict[str, float | int | None]] = defaultdict(lambda: {
+    class _FilterBreakdownRow(TypedDict):
+        sessions_started: int
+        sessions_with_interaction: int
+        avg_seconds_to_interaction: float | None
+        median_seconds_to_interaction: float | None
+        interaction_rate: float | None
+
+    breakdown: defaultdict[str, _FilterBreakdownRow] = defaultdict(lambda: {
         'sessions_started': 0,
         'sessions_with_interaction': 0,
         'avg_seconds_to_interaction': None,
