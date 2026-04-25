@@ -48,13 +48,20 @@
     <div class="period-chip">Current: {{ period_display }}</div>
 </div>
 
-<div class="cards">
-    <div class="card highlight-card">
+<!-- Full-width top hotspot banner — owns its own row so the label has room -->
+<div class="hotspot-banner">
+    <div class="hotspot-banner-left">
         <div class="label">Top Crash Hotspot</div>
-        <div class="value">{{ top_hotspot_count }}</div>
-        <div class="subline">{{ top_hotspot_label }}</div>
+        <code class="hotspot-location" title="{{ top_hotspot_label }}">{{ top_hotspot_label }}</code>
     </div>
+    <div class="hotspot-banner-right">
+        <div class="value">{{ top_hotspot_count }}</div>
+        <div class="subline">crashes</div>
+    </div>
+</div>
 
+<!-- Stat cards (highlight card removed — now shown in banner above) -->
+<div class="cards">
     <div class="card">
         <div class="label">Top Hotspot Share</div>
         <div class="value">{{ top_hotspot_share }} <span class="unit">%</span></div>
@@ -124,27 +131,37 @@
         <table class="analytics-table">
             <thead>
                 <tr>
-                    <th>Hotspot</th>
-                    <th>Count</th>
-                    <th>Share</th>
+                    <th>#</th>
                     <th>Feature</th>
                     <th>Code Location</th>
                     <th>Signature</th>
+                    <th style="text-align:right;">Count</th>
+                    <th style="text-align:right;">Share</th>
                 </tr>
             </thead>
             <tbody>
                 {% for item in top_hotspots %}
                 <tr>
-                    <td>{{ item.label }}</td>
-                    <td>{{ item.count }}</td>
-                    <td>{{ item.percentage }}%</td>
-                    <td>{{ item.feature_name }}</td>
-                    <td>{{ item.code_location }}</td>
-                    <td>{{ item.crash_signature }}</td>
+                    <td>{{ forloop.counter }}</td>
+                    <td>{{ item.feature_name|default:"—" }}</td>
+                    <td class="col-wrap">
+                        {% if item.code_location %}
+                            <code class="code-chip" title="{{ item.code_location }}">{{ item.code_location }}</code>
+                        {% else %}
+                            <span style="color:#9ca3af;">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="col-wrap">
+                        <span class="crash-sig" title="{{ item.crash_signature }}">{{ item.crash_signature }}</span>
+                    </td>
+                    <td style="text-align:right; font-weight:600;">{{ item.count }}</td>
+                    <td style="text-align:right;">{{ item.percentage }}%</td>
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="6">No crash hotspots available.</td>
+                    <td colspan="6" style="color:#9ca3af; text-align:center; padding:24px;">
+                        No crash hotspots available.
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
