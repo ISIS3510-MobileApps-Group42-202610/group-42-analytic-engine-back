@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Min, Q
 from django.utils import timezone
 from collections import defaultdict
 from statistics import median
@@ -84,23 +84,26 @@ def calculate_q9_messaging_impact_metric_with_filters(
     """
     Calculate Q9 metric with optional date filtering over the analytics event stream.
 
-    Date window controls the analysis population: listings with any event in the range.
-    Completion still uses listing final backend state (ListingAnalyticsState).
+    Date window controls the analysis population: listings whose first known
+    business event occurred in the range. Cohort grouping uses listing-level
+    state so a listing does not move between cohorts when the period changes.
+    For bounded periods, completion is counted only when the transaction was
+    completed inside the same reporting window.
     """
     population_listing_ids = _population_listing_ids_for_window(since=since, until=until)
 
     listing_states = ListingAnalyticsState.objects.filter(listing_id__in=population_listing_ids)
 
-    messaging_listing_ids = _messaging_listing_ids_for_window(since=since, until=until)
+    completed_filter = _completed_filter_for_window(since=since, until=until)
 
-    with_messaging = listing_states.filter(listing_id__in=messaging_listing_ids)
-    without_messaging = listing_states.exclude(listing_id__in=messaging_listing_ids)
+    with_messaging = listing_states.filter(has_messaging_interaction=True)
+    without_messaging = listing_states.filter(has_messaging_interaction=False)
 
     with_total = with_messaging.count()
-    with_completed = with_messaging.filter(is_transaction_completed=True).count()
+    with_completed = with_messaging.filter(completed_filter).count()
 
     without_total = without_messaging.count()
-    without_completed = without_messaging.filter(is_transaction_completed=True).count()
+    without_completed = without_messaging.filter(completed_filter).count()
 
     with_rate = (with_completed / with_total) if with_total else None
     without_rate = (without_completed / without_total) if without_total else None
@@ -113,6 +116,10 @@ def calculate_q9_messaging_impact_metric_with_filters(
         if without_rate > 0:
             relative_lift_percentage = ((with_rate - without_rate) / without_rate) * 100
 
+    total_completed = with_completed + without_completed
+    with_completed_share = (with_completed / total_completed) if total_completed else None
+    without_completed_share = (without_completed / total_completed) if total_completed else None
+
     return {
         'period': {
             'label': period_label,
@@ -123,12 +130,16 @@ def calculate_q9_messaging_impact_metric_with_filters(
             'listings': with_total,
             'completed': with_completed,
             'completion_rate': with_rate,
+            'completed_share': with_completed_share,
         },
         'group_without_messaging': {
             'listings': without_total,
             'completed': without_completed,
             'completion_rate': without_rate,
+            'completed_share': without_completed_share,
         },
+        'total_listings': with_total + without_total,
+        'total_completed': total_completed,
         'absolute_difference': absolute_difference,
         'relative_lift_percentage': relative_lift_percentage,
         'definitions': {
@@ -141,33 +152,34 @@ def calculate_q9_messaging_impact_metric_with_filters(
                 'messaging interaction for Q9 grouping.'
             ),
             'completed_transaction': (
-                'ListingAnalyticsState.is_transaction_completed = true '
-                '(updated by transaction_completed business events).'
+                'ListingAnalyticsState.is_transaction_completed = true. '
+                'For bounded periods, transaction_completed_at must be inside '
+                'the selected reporting window.'
             ),
         },
     }
 
 
 def _population_listing_ids_for_window(since=None, until=None):
-    events = AnalyticsEvent.objects.all()
-    if since is not None:
-        events = events.filter(occurred_at__gte=since)
-    if until is not None:
-        events = events.filter(occurred_at__lte=until)
-    return events.values_list('listing_id', flat=True).distinct()
-
-
-def _messaging_listing_ids_for_window(since=None, until=None):
-    messaging_events = AnalyticsEvent.objects.filter(
-        event_name=AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
-        buyer_user_id__isnull=False,
-        seller_user_id__isnull=False,
+    events = (
+        AnalyticsEvent.objects
+        .values('listing_id')
+        .annotate(first_seen_at=Min('occurred_at'))
     )
     if since is not None:
-        messaging_events = messaging_events.filter(occurred_at__gte=since)
+        events = events.filter(first_seen_at__gte=since)
     if until is not None:
-        messaging_events = messaging_events.filter(occurred_at__lte=until)
-    return messaging_events.values_list('listing_id', flat=True).distinct()
+        events = events.filter(first_seen_at__lte=until)
+    return events.values_list('listing_id', flat=True)
+
+
+def _completed_filter_for_window(since=None, until=None):
+    completed_filter = Q(is_transaction_completed=True)
+    if since is not None:
+        completed_filter &= Q(transaction_completed_at__gte=since)
+    if until is not None:
+        completed_filter &= Q(transaction_completed_at__lte=until)
+    return completed_filter
 
 
 def resolve_reporting_window(period: str, start=None, end=None):

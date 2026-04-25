@@ -10,6 +10,34 @@ from marketplace_analytics.models import SearchDiscoveryEvent
 class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(source='occurred_at', required=False)
 
+    EVENT_ALIASES = {
+        'listing_opened': AnalyticsEvent.EventName.LISTING_VIEWED,
+        'view_listing': AnalyticsEvent.EventName.LISTING_VIEWED,
+        'product_viewed': AnalyticsEvent.EventName.LISTING_VIEWED,
+        'chat_opened': AnalyticsEvent.EventName.CHAT_STARTED,
+        'conversation_started': AnalyticsEvent.EventName.CHAT_STARTED,
+        'message_sent': AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
+        'comment_sent': AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
+        'comment_created': AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
+        'buyer_seller_message_sent': AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
+        'sale_completed': AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        'purchase_completed': AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        'listing_sold': AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        'product_sold': AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        'reservation_completed': AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+    }
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy()
+        event_name = mutable_data.get('event_name')
+        if isinstance(event_name, str):
+            normalized_event_name = event_name.strip().lower()
+            mutable_data['event_name'] = self.EVENT_ALIASES.get(
+                normalized_event_name,
+                normalized_event_name,
+            )
+        return super().to_internal_value(mutable_data)
+
     class Meta:
         model = AnalyticsEvent
         fields = [

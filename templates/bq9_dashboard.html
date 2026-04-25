@@ -56,15 +56,41 @@
     </div>
 
     <div class="card">
+        <div class="label">Completed Sales With Messaging</div>
+        <div class="value">{{ with_completed_share_pct }} <span class="unit">%</span></div>
+        <div class="subline">{{ with_completed }} / {{ total_completed }} completed sales</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Completed Sales Without Messaging</div>
+        <div class="value">{{ without_completed_share_pct }} <span class="unit">%</span></div>
+        <div class="subline">{{ without_completed }} / {{ total_completed }} completed sales</div>
+    </div>
+</div>
+
+<div class="cards q9-cards">
+    <div class="card">
         <div class="label">Absolute Difference</div>
         <div class="value">{{ absolute_difference_pct }} <span class="unit">pp</span></div>
-        <div class="subline">Percentage points</div>
+        <div class="subline">Conversion-rate percentage points</div>
     </div>
 
     <div class="card">
         <div class="label">Relative Lift</div>
         <div class="value">{{ relative_lift_pct }} <span class="unit">%</span></div>
         <div class="subline">Improvement vs no messaging</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Total Listings</div>
+        <div class="value">{{ total_listings }}</div>
+        <div class="subline">{{ with_listings }} with messaging, {{ without_listings }} without</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Total Completed Sales</div>
+        <div class="value">{{ total_completed }}</div>
+        <div class="subline">{{ with_completed }} with messaging, {{ without_completed }} without</div>
     </div>
 </div>
 
@@ -74,8 +100,8 @@
         <canvas id="q9CompletionRateChart"></canvas>
     </div>
     <div class="chart-box">
-        <h3>Cohort Size Distribution</h3>
-        <canvas id="q9CohortSizeChart"></canvas>
+        <h3>Completed Sales Distribution</h3>
+        <canvas id="q9CompletedDistributionChart"></canvas>
     </div>
 </div>
 
@@ -83,23 +109,22 @@
     <h3>Methodological Definitions</h3>
     <ul>
         <li>With messaging: listing has at least one first_message_sent event (buyer and seller present).</li>
-        <li>Without messaging: listing has no first_message_sent in the selected period.</li>
-        <li>Completed: listing final state has transaction_completed in backend truth table.</li>
+        <li>Without messaging: listing has no first_message_sent in the backend truth table.</li>
+        <li>Completed: listing state has transaction_completed; for bounded periods the completion timestamp must be inside the selected range.</li>
+        <li>Completion-rate percentages compare each cohort independently; completed-sales distribution is the chart that sums to 100%.</li>
     </ul>
 </div>
 
 {{ completion_labels|json_script:"q9-completion-labels" }}
 {{ completion_rates|json_script:"q9-completion-rates" }}
-{{ with_listings|json_script:"q9-with-listings" }}
-{{ without_listings|json_script:"q9-without-listings" }}
+{{ completed_distribution|json_script:"q9-completed-distribution" }}
 {% endblock %}
 
 {% block extra_js %}
 <script>
     const completionLabels = JSON.parse(document.getElementById('q9-completion-labels').textContent);
     const completionRates = JSON.parse(document.getElementById('q9-completion-rates').textContent);
-    const withListings = JSON.parse(document.getElementById('q9-with-listings').textContent);
-    const withoutListings = JSON.parse(document.getElementById('q9-without-listings').textContent);
+    const completedDistribution = JSON.parse(document.getElementById('q9-completed-distribution').textContent);
 
     createComparisonBarChart(
         'q9CompletionRateChart',
@@ -108,9 +133,9 @@
     );
 
     createDonutChart(
-        'q9CohortSizeChart',
+        'q9CompletedDistributionChart',
         ['With Messaging', 'Without Messaging'],
-        [withListings, withoutListings]
+        completedDistribution
     );
 
     const periodSelect = document.getElementById('period');

@@ -2,7 +2,7 @@ import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
@@ -38,6 +38,28 @@ from marketplace_analytics.services import (
     calculate_q9_messaging_impact_metric_with_filters,
     resolve_reporting_window,
 )
+
+
+BUSINESS_EVENT_NAMES_AND_ALIASES = {
+    'listing_viewed',
+    'listing_opened',
+    'view_listing',
+    'product_viewed',
+    'chat_started',
+    'chat_opened',
+    'conversation_started',
+    'first_message_sent',
+    'message_sent',
+    'comment_sent',
+    'comment_created',
+    'buyer_seller_message_sent',
+    'transaction_completed',
+    'sale_completed',
+    'purchase_completed',
+    'listing_sold',
+    'product_sold',
+    'reservation_completed',
+}
 
 
 @csrf_exempt
@@ -329,6 +351,8 @@ def q9_dashboard(request):
 
     with_rate = with_group['completion_rate'] if with_group['completion_rate'] is not None else 0
     without_rate = without_group['completion_rate'] if without_group['completion_rate'] is not None else 0
+    with_completed_share = with_group['completed_share'] if with_group['completed_share'] is not None else 0
+    without_completed_share = without_group['completed_share'] if without_group['completed_share'] is not None else 0
     absolute_difference = report['absolute_difference'] if report['absolute_difference'] is not None else 0
     relative_lift = report['relative_lift_percentage'] if report['relative_lift_percentage'] is not None else 0
 
@@ -348,12 +372,17 @@ def q9_dashboard(request):
         'without_listings': without_group['listings'],
         'with_completed': with_group['completed'],
         'without_completed': without_group['completed'],
+        'total_listings': report['total_listings'],
+        'total_completed': report['total_completed'],
         'with_rate_pct': round(with_rate * 100, 2),
         'without_rate_pct': round(without_rate * 100, 2),
+        'with_completed_share_pct': round(with_completed_share * 100, 2),
+        'without_completed_share_pct': round(without_completed_share * 100, 2),
         'absolute_difference_pct': round(absolute_difference * 100, 2),
         'relative_lift_pct': round(relative_lift, 2),
         'completion_labels': ['With Messaging', 'Without Messaging'],
         'completion_rates': [round(with_rate * 100, 2), round(without_rate * 100, 2)],
+        'completed_distribution': [with_group['completed'], without_group['completed']],
     }
     return render(request, 'bq9_dashboard.html', context)
 
@@ -444,7 +473,10 @@ def bq12_dashboard(request):
     Dashboard for BQ12 seasonal demand patterns.
     Consumes aggregated analytics from the general backend endpoint.
     """
-    grain = (request.GET.get('grain') or 'month').strip()
+    grain = (request.GET.get('grain') or 'month').strip().lower()
+    if grain not in {'day', 'week', 'month'}:
+        grain = 'month'
+
     date_from = (request.GET.get('from') or '2026-01-01').strip()
     date_to = (request.GET.get('to') or '2026-12-31').strip()
     university_code = (request.GET.get('university_code') or 'UNIANDES').strip().upper()
@@ -473,7 +505,11 @@ def bq12_dashboard(request):
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         error_message = f'Could not load BQ12 data from backend: {exc}'
 
-    period_set = sorted({row.get('period_start') for row in rows if row.get('period_start')})
+    requested_start = _parse_bq12_date(date_from)
+    requested_end = _parse_bq12_date(date_to)
+    period_set = _build_bq12_period_axis(rows, grain, requested_start, requested_end)
+    period_labels = [_format_bq12_period_label(period, grain) for period in period_set]
+
     faculty_set = sorted({row.get('faculty') or 'Unknown' for row in rows})
     phase_totals = {}
 
@@ -484,7 +520,7 @@ def bq12_dashboard(request):
     total_transactions = 0
 
     for row in rows:
-        period = row.get('period_start')
+        period = _normalize_bq12_period(row.get('period_start'), grain)
         faculty = row.get('faculty') or 'Unknown'
         phase = row.get('calendar_phase') or 'unknown'
 
@@ -529,7 +565,7 @@ def bq12_dashboard(request):
         'total_listings': total_listings,
         'total_transactions': total_transactions,
         'overall_conversion_rate': round(overall_conversion_rate * 100, 2),
-        'period_labels': period_set,
+        'period_labels': period_labels,
         'faculty_datasets': faculty_datasets,
         'phase_labels': phase_labels,
         'phase_conversion_rates': phase_conversion_rates,
@@ -537,6 +573,88 @@ def bq12_dashboard(request):
     }
 
     return render(request, 'bq12_dashboard.html', context)
+
+
+def _parse_bq12_date(value):
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_bq12_period(value, grain):
+    if not value:
+        return ''
+
+    raw = str(value)
+    period_date = _parse_bq12_date(raw[:10])
+    if period_date is None:
+        return raw
+
+    if grain == 'day':
+        return period_date.isoformat()
+
+    if grain == 'week':
+        week_start = period_date - timedelta(days=period_date.weekday())
+        return week_start.isoformat()
+
+    month_start = period_date.replace(day=1)
+    return month_start.isoformat()
+
+
+def _build_bq12_period_axis(rows, grain, requested_start, requested_end):
+    periods_from_rows = {
+        _normalize_bq12_period(row.get('period_start'), grain)
+        for row in rows
+        if row.get('period_start')
+    }
+    periods_from_rows.discard('')
+
+    if requested_start and requested_end and requested_start <= requested_end:
+        return _generate_bq12_periods(requested_start, requested_end, grain)
+
+    return sorted(periods_from_rows)
+
+
+def _generate_bq12_periods(start_date, end_date, grain):
+    periods = []
+
+    if grain == 'day':
+        current = start_date
+        while current <= end_date:
+            periods.append(current.isoformat())
+            current += timedelta(days=1)
+        return periods
+
+    if grain == 'week':
+        current = start_date - timedelta(days=start_date.weekday())
+        last = end_date - timedelta(days=end_date.weekday())
+        while current <= last:
+            periods.append(current.isoformat())
+            current += timedelta(days=7)
+        return periods
+
+    current = start_date.replace(day=1)
+    last = end_date.replace(day=1)
+    while current <= last:
+        periods.append(current.isoformat())
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
+    return periods
+
+
+def _format_bq12_period_label(period, grain):
+    period_date = _parse_bq12_date(period)
+    if period_date is None:
+        return period
+
+    if grain == 'day':
+        return period_date.strftime('%b %d')
+    if grain == 'week':
+        return f"Week of {period_date.strftime('%b %d')}"
+    return period_date.strftime('%b %Y')
 
 
 class BusinessEventIngestionAPIView(APIView):
@@ -548,7 +666,9 @@ class BusinessEventIngestionAPIView(APIView):
     permission_classes = (AllowAny,)
 
     def post(self, request):
-        serializer = AnalyticsEventIngestSerializer(data=request.data)
+        serializer = AnalyticsEventIngestSerializer(
+            data=_normalize_business_event_payload(request.data)
+        )
         serializer.is_valid(raise_exception=True)
 
         try:
@@ -630,6 +750,53 @@ def _extract_period_params(request):
     return period, start, end
 
 
+def _normalize_business_event_payload(data):
+    """
+    Accept both the canonical BQ9 payload and the Android AnalyticsLogger shape:
+    {"event_name": "...", "user_id": 1, "properties": {...}}.
+    """
+    payload = data.copy()
+    properties = payload.get('properties') or payload.get('metadata') or {}
+    if not isinstance(properties, dict):
+        properties = {}
+
+    def first_value(*keys):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ''):
+                return value
+            value = properties.get(key)
+            if value not in (None, ''):
+                return value
+        return None
+
+    normalized = {
+        'event_name': first_value('event_name', 'name', 'type'),
+        'listing_id': first_value('listing_id', 'listingId', 'product_id', 'productId'),
+        'buyer_user_id': first_value('buyer_user_id', 'buyerUserId', 'buyer_id', 'buyerId'),
+        'seller_user_id': first_value('seller_user_id', 'sellerUserId', 'seller_id', 'sellerId'),
+        'timestamp': first_value('timestamp', 'occurred_at', 'occurredAt'),
+        'metadata': properties,
+        'client_event_id': first_value('client_event_id', 'clientEventId', 'event_id', 'eventId'),
+    }
+
+    if normalized['buyer_user_id'] is None:
+        normalized['buyer_user_id'] = first_value('user_id', 'userId')
+
+    timestamp = normalized.get('timestamp')
+    if isinstance(timestamp, (int, float)) or (isinstance(timestamp, str) and timestamp.isdigit()):
+        normalized['timestamp'] = datetime.fromtimestamp(
+            int(timestamp) / 1000,
+            tz=dt_timezone.utc,
+        ).isoformat()
+
+    return {
+        key: value
+        for key, value in normalized.items()
+        if value not in (None, '')
+    }
+
+
 class BQ3SearchDiscoveryEventIngestionAPIView(APIView):
     authentication_classes = (
         JWTIngestionAuthentication,
@@ -703,6 +870,25 @@ def legacy_events_endpoint(request):
         event_name = data.get('event_name', 'unknown')
         user_id = data.get('user_id', 0)
         properties = data.get('properties', {})
+
+        if str(event_name).strip().lower() in BUSINESS_EVENT_NAMES_AND_ALIASES:
+            business_payload = _normalize_business_event_payload(data)
+            serializer = AnalyticsEventIngestSerializer(data=business_payload)
+            if not serializer.is_valid():
+                return JsonResponse({
+                    'status': 'error',
+                    'detail': serializer.errors,
+                    'target': 'business_events',
+                }, status=400)
+            event = ingest_business_event(serializer.validated_data)
+            return JsonResponse({
+                'status': 'ok',
+                'event_name': event.event_name,
+                'event_id': event.pk,
+                'listing_id': event.listing_id,
+                'saved': True,
+                'target': 'business_events',
+            }, status=201)
         
         # Parse timestamp
         timestamp_str = properties.get('timestamp')

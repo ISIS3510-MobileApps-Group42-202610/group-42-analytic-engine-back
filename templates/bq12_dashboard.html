@@ -80,12 +80,12 @@
 <div class="charts">
     <div class="chart-box">
         <h3>Listings Created Over Time by Faculty</h3>
-        <canvas id="bq12FacultyTrendChart"></canvas>
+        <canvas id="bq12FacultyTrendChart" height="140"></canvas>
     </div>
 
     <div class="chart-box">
         <h3>Conversion Rate by Academic Calendar Phase</h3>
-        <canvas id="bq12PhaseConversionChart"></canvas>
+        <canvas id="bq12PhaseConversionChart" height="140"></canvas>
     </div>
 </div>
 
@@ -143,10 +143,12 @@
     const phaseConversionRatesEl = document.getElementById('bq12-phase-conversion-rates');
 
     if (periodLabelsEl && facultyDatasetsEl && phaseLabelsEl && phaseConversionRatesEl) {
+        const selectedGrain = '{{ selected_grain }}';
         const periodLabels = JSON.parse(periodLabelsEl.textContent);
         const facultyDatasets = JSON.parse(facultyDatasetsEl.textContent);
         const phaseLabels = JSON.parse(phaseLabelsEl.textContent);
         const phaseConversionRates = JSON.parse(phaseConversionRatesEl.textContent);
+        const isDaily = selectedGrain === 'day';
 
         const coloredFacultyDatasets = facultyDatasets.map((item, index) => {
             const color = PALETTE[index % PALETTE.length];
@@ -157,7 +159,8 @@
                 backgroundColor: color,
                 fill: false,
                 tension: 0.25,
-                pointRadius: 3,
+                pointRadius: isDaily ? 0 : 3,
+                pointHoverRadius: 4,
             };
         });
 
@@ -169,10 +172,22 @@
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: true,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
                 plugins: {
                     legend: { position: 'bottom' }
                 },
                 scales: {
+                    x: {
+                        ticks: {
+                            autoSkip: true,
+                            maxTicksLimit: isDaily ? 12 : 10,
+                            maxRotation: 0
+                        }
+                    },
                     y: {
                         beginAtZero: true,
                         title: { display: true, text: 'Listings Created' }
