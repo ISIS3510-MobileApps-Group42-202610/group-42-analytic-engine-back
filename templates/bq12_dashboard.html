@@ -3,6 +3,12 @@
 {% block title %}BQ12: Seasonal Demand Patterns - Analytics Dashboard{% endblock %}
 {% block nav_bq12 %}active{% endblock %}
 
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/dist/date-fns.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <div class="bq-box">
     <h3>Business Question (BQ12)</h3>
@@ -80,6 +86,9 @@
 <div class="charts">
     <div class="chart-box">
         <h3>Listings Created Over Time by Faculty</h3>
+        <div style="display:flex; justify-content:flex-end; margin-top:-6px; margin-bottom:6px;">
+            <button type="button" id="bq12ResetZoom" style="display:none;">Reset zoom</button>
+        </div>
         <canvas id="bq12FacultyTrendChart" height="140"></canvas>
     </div>
 
@@ -99,7 +108,7 @@
 </div>
 
 <div class="chart-box full">
-    <h3>Raw Aggregated Data (Backend Response)</h3>
+    <h3>Aggregated Data (Backend)</h3>
     <div class="table-scroll">
         <table class="analytics-table">
             <thead>
@@ -128,6 +137,7 @@
     </div>
 </div>
 
+{{ period_keys|json_script:"bq12-period-keys" }}
 {{ period_labels|json_script:"bq12-period-labels" }}
 {{ faculty_datasets|json_script:"bq12-faculty-datasets" }}
 {{ phase_labels|json_script:"bq12-phase-labels" }}
@@ -137,18 +147,21 @@
 
 {% block extra_js %}
 <script>
+    const periodKeysEl = document.getElementById('bq12-period-keys');
     const periodLabelsEl = document.getElementById('bq12-period-labels');
     const facultyDatasetsEl = document.getElementById('bq12-faculty-datasets');
     const phaseLabelsEl = document.getElementById('bq12-phase-labels');
     const phaseConversionRatesEl = document.getElementById('bq12-phase-conversion-rates');
 
-    if (periodLabelsEl && facultyDatasetsEl && phaseLabelsEl && phaseConversionRatesEl) {
+    if (periodKeysEl && periodLabelsEl && facultyDatasetsEl && phaseLabelsEl && phaseConversionRatesEl) {
         const selectedGrain = '{{ selected_grain }}';
+        const periodKeys = JSON.parse(periodKeysEl.textContent);
         const periodLabels = JSON.parse(periodLabelsEl.textContent);
         const facultyDatasets = JSON.parse(facultyDatasetsEl.textContent);
         const phaseLabels = JSON.parse(phaseLabelsEl.textContent);
         const phaseConversionRates = JSON.parse(phaseConversionRatesEl.textContent);
         const isDaily = selectedGrain === 'day';
+        const timeUnit = isDaily ? 'day' : (selectedGrain === 'week' ? 'week' : 'month');
 
         const coloredFacultyDatasets = facultyDatasets.map((item, index) => {
             const color = PALETTE[index % PALETTE.length];
@@ -164,10 +177,10 @@
             };
         });
 
-        new Chart(document.getElementById('bq12FacultyTrendChart'), {
+        const facultyChart = new Chart(document.getElementById('bq12FacultyTrendChart'), {
             type: 'line',
             data: {
-                labels: periodLabels,
+                labels: periodKeys,
                 datasets: coloredFacultyDatasets,
             },
             options: {
@@ -178,10 +191,31 @@
                     intersect: false
                 },
                 plugins: {
-                    legend: { position: 'bottom' }
+                    legend: { position: 'bottom' },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                if (!items || !items.length) return '';
+                                const index = items[0].dataIndex;
+                                return periodLabels[index] || items[0].label || '';
+                            }
+                        }
+                    },
+                    zoom: isDaily ? {
+                        pan: { enabled: true, mode: 'x' },
+                        zoom: {
+                            wheel: { enabled: true },
+                            pinch: { enabled: true },
+                            drag: { enabled: true },
+                            mode: 'x',
+                        },
+                        limits: { x: { min: 'original', max: 'original' } }
+                    } : undefined
                 },
                 scales: {
                     x: {
+                        type: 'time',
+                        time: { unit: timeUnit },
                         ticks: {
                             autoSkip: true,
                             maxTicksLimit: isDaily ? 12 : 10,
@@ -195,6 +229,12 @@
                 }
             }
         });
+
+        const resetBtn = document.getElementById('bq12ResetZoom');
+        if (resetBtn && isDaily && typeof facultyChart.resetZoom === 'function') {
+            resetBtn.style.display = 'inline-block';
+            resetBtn.addEventListener('click', () => facultyChart.resetZoom());
+        }
 
         new Chart(document.getElementById('bq12PhaseConversionChart'), {
             type: 'bar',

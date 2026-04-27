@@ -699,6 +699,8 @@ def bq12_dashboard(request):
         'total_listings': total_listings,
         'total_transactions': total_transactions,
         'overall_conversion_rate': round(overall_conversion_rate * 100, 2),
+        # ISO date keys for time-scale plotting (especially useful for day zooming).
+        'period_keys': list(period_set),
         'period_labels': period_labels,
         'faculty_datasets': faculty_datasets,
         'phase_labels': phase_labels,
