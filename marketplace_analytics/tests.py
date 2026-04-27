@@ -12,7 +12,7 @@ from marketplace_analytics.services import (
     calculate_bq1_crash_hotspot_metric,
     calculate_q9_messaging_impact_metric_with_filters,
 )
-from marketplace_analytics.views import _build_bq12_period_axis, _normalize_bq12_period
+from marketplace_analytics.views import _build_bq12_period_axis, _normalize_bq12_period, _parse_bq12_date
 
 
 class BusinessEventIngestionTests(TestCase):
@@ -176,6 +176,9 @@ class BQ12PeriodAxisTests(SimpleTestCase):
             _normalize_bq12_period('2026-04-25T14:30:00Z', 'day'),
             '2026-04-25',
         )
+
+    def test_parse_accepts_dd_mm_yyyy(self):
+        self.assertEqual(_parse_bq12_date('25/04/2026').isoformat(), '2026-04-25')
 
 
 class BQ1CrashHotspotMetricTests(TestCase):

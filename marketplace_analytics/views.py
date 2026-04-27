@@ -595,10 +595,19 @@ def bq12_dashboard(request):
     if grain not in {'day', 'week', 'month'}:
         grain = 'month'
 
-    date_from = (request.GET.get('from') or '2026-01-01').strip()
-    date_to = (request.GET.get('to') or '2026-12-31').strip()
+    raw_date_from = (request.GET.get('from') or '2026-01-01').strip()
+    raw_date_to = (request.GET.get('to') or '2026-12-31').strip()
     university_code = (request.GET.get('university_code')
                        or 'UNIANDES').strip().upper()
+
+    requested_start = _parse_bq12_date(raw_date_from) or date(2026, 1, 1)
+    requested_end = _parse_bq12_date(raw_date_to) or date(2026, 12, 31)
+    if requested_start > requested_end:
+        requested_start, requested_end = requested_end, requested_start
+
+    # Always talk to the upstream API using ISO-8601 dates.
+    date_from = requested_start.isoformat()
+    date_to = requested_end.isoformat()
 
     base_url = getattr(
         settings,
@@ -606,26 +615,30 @@ def bq12_dashboard(request):
         'https://group-42-backend.vercel.app',
     ).rstrip('/')
 
-    query = urlencode({
-        'grain': grain,
-        'from': date_from,
-        'to': date_to,
-        'university_code': university_code,
-    })
-    endpoint_url = f'{base_url}/api/v1/listings/analytics/seasonal-demand?{query}'
-
     rows = []
     error_message = ''
 
     try:
-        with urlopen(endpoint_url, timeout=12) as response:
-            payload = json.loads(response.read().decode('utf-8'))
-            rows = payload.get('data') or []
+        # Some upstream implementations reject very large "day" windows.
+        if grain == 'day' and (requested_end - requested_start).days > 120:
+            rows = _fetch_bq12_rows_chunked(
+                base_url=base_url,
+                grain=grain,
+                start_date=requested_start,
+                end_date=requested_end,
+                university_code=university_code,
+            )
+        else:
+            rows = _fetch_bq12_rows(
+                base_url=base_url,
+                grain=grain,
+                date_from=date_from,
+                date_to=date_to,
+                university_code=university_code,
+            )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        error_message = f'Could not load BQ12 data from backend: {exc}'
+        error_message = _format_bq12_upstream_error(exc)
 
-    requested_start = _parse_bq12_date(date_from)
-    requested_end = _parse_bq12_date(date_to)
     period_set = _build_bq12_period_axis(rows, grain, requested_start, requested_end)
     period_labels = [_format_bq12_period_label(period, grain) for period in period_set]
 
@@ -697,10 +710,106 @@ def bq12_dashboard(request):
 
 
 def _parse_bq12_date(value):
-    try:
-        return date.fromisoformat(value)
-    except (TypeError, ValueError):
+    if value is None:
         return None
+
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    # Fast path: ISO-8601 date (or datetime-like strings with an ISO date prefix).
+    try:
+        return date.fromisoformat(raw[:10])
+    except (TypeError, ValueError):
+        pass
+
+    # Accept common UI formats like DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD.
+    for sep in ('/', '-', '.'):
+        if sep not in raw:
+            continue
+        parts = raw.split(sep)
+        if len(parts) != 3:
+            continue
+
+        a, b, c = (p.strip() for p in parts)
+        if len(a) == 4:  # YYYY/MM/DD
+            try:
+                return date(int(a), int(b), int(c))
+            except ValueError:
+                continue
+        if len(c) == 4:  # DD/MM/YYYY
+            try:
+                return date(int(c), int(b), int(a))
+            except ValueError:
+                continue
+
+    return None
+
+
+def _fetch_bq12_rows(*, base_url: str, grain: str, date_from: str, date_to: str, university_code: str):
+    query = urlencode({
+        'grain': grain,
+        'from': date_from,
+        'to': date_to,
+        'university_code': university_code,
+    })
+    endpoint_url = f'{base_url}/api/v1/listings/analytics/seasonal-demand?{query}'
+
+    with urlopen(endpoint_url, timeout=12) as response:
+        payload = json.loads(response.read().decode('utf-8'))
+        return payload.get('data') or []
+
+
+def _fetch_bq12_rows_chunked(
+    *,
+    base_url: str,
+    grain: str,
+    start_date: date,
+    end_date: date,
+    university_code: str,
+):
+    # Chunking avoids upstream query-size/range limits while keeping the UI grain unchanged.
+    # Only used for grain=day to avoid week/month boundary double-counting.
+    max_days_per_request = 90
+
+    all_rows = []
+    cursor = start_date
+
+    while cursor <= end_date:
+        chunk_end = min(end_date, cursor + timedelta(days=max_days_per_request - 1))
+        all_rows.extend(_fetch_bq12_rows(
+            base_url=base_url,
+            grain=grain,
+            date_from=cursor.isoformat(),
+            date_to=chunk_end.isoformat(),
+            university_code=university_code,
+        ))
+        cursor = chunk_end + timedelta(days=1)
+
+    return all_rows
+
+
+def _format_bq12_upstream_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        detail = ''
+        try:
+            body = exc.read()
+            if body:
+                detail = body.decode('utf-8', errors='replace').strip()
+        except Exception:
+            detail = ''
+
+        if detail:
+            # Keep it short; this is rendered inside the dashboard.
+            detail_preview = detail[:400]
+            return f'Could not load BQ12 data from backend: HTTP {exc.code}. {detail_preview}'
+
+        return f'Could not load BQ12 data from backend: {exc}'
+
+    return f'Could not load BQ12 data from backend: {exc}'
 
 
 def _normalize_bq12_period(value, grain):
