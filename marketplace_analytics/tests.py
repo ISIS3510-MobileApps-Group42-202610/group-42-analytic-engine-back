@@ -131,6 +131,29 @@ class Q9MetricTests(TestCase):
         self.assertEqual(report['group_without_messaging']['completed'], 0)
         self.assertEqual(report['total_completed'], 0)
 
+    def test_q9_dashboard_completed_sales_cards_show_counts_not_share_percentages(self):
+        now = timezone.now()
+
+        AnalyticsEvent.objects.create(
+            event_name=AnalyticsEvent.EventName.LISTING_VIEWED,
+            listing_id=3001,
+            occurred_at=now - timedelta(days=2),
+        )
+        ListingAnalyticsState.objects.create(
+            listing_id=3001,
+            has_messaging_interaction=True,
+            is_transaction_completed=True,
+            transaction_completed_at=now - timedelta(days=1),
+            last_event_at=now - timedelta(days=1),
+        )
+
+        response = self.client.get(reverse('bq9-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Completed Sales With Messaging')
+        self.assertContains(response, '1</div>')
+        self.assertContains(response, '100.0% of 1 completed sales')
+
 
 class BQ12PeriodAxisTests(SimpleTestCase):
     def test_daily_axis_includes_every_day_in_selected_range(self):
