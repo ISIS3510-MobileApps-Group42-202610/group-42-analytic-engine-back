@@ -71,17 +71,30 @@ BUSINESS_EVENT_NAMES_AND_ALIASES = {
 @csrf_exempt
 def post_performance_event(request):
     """
-    Post un evento de performance para el analytics engine
-    :param request: Debe ser un POST con JSON body que contenga:
+    Post un evento de performance para el analytics engine.
+    Acepta dos formatos:
+    
+    Formato legacy (BQ2 original):
     {
-    "event_type": "app_startup" o "screen_navigation",
-    "device_model": "iPhone 15",
-    "platform": "ios" o "android",
-    "duration_ms": 123.45,
-    "os_version": "17.3" o "14" (opcional),
-    "app_version": "1.2.3" (opcional)
+        "event_type": "app_startup" o "screen_navigation",
+        "device_model": "Samsung S6",
+        "platform": "android",
+        "duration_ms": 123.45,
+        "os_version": "14" (opcional),
+        "app_version": "1.2.3" (opcional)
     }
-    :return: JSON con status del resultado
+    
+    Formato Android app (BQ2 desde BusinessAnalyticsTracker):
+    {
+        "event_type": "performance_metric",
+        "metric_name": "listing_detail_load_time",
+        "value_ms": 1234,
+        "timestamp": "2026-04-29T...",
+        "listing_id": 5,
+        "screen_name": "ListingDetailScreen",
+        "metadata": {...},
+        "client_event_id": "uuid"
+    }
     """
     if request.method != 'POST':
         return JsonResponse({'status': 'POST required'}, status=405)
@@ -91,15 +104,43 @@ def post_performance_event(request):
     except json.JSONDecodeError:
         return JsonResponse({'status': 'Invalid JSON'}, status=400)
 
-    PerformanceEvent.objects.create(
-        event_type=data['event_type'],  # "app_startup" or "screen_navigation"
-        device_model=data['device_model'],
-        platform=data['platform'],  # "ios" or "android"
-        duration_ms=data['duration_ms'],  # tiempo en ms
-        timestamp=timezone.now(),
-        os_version=data.get('os_version', ''),
-        app_version=data.get('app_version', ''),
-    )
+    # Detect format: if metric_name is present, it's the Android app format
+    if 'metric_name' in data or data.get('event_type') == 'performance_metric':
+        # Android app format - map to legacy fields
+        metric_name = data.get('metric_name', 'unknown_metric')
+        value_ms = data.get('value_ms', 0)
+        screen_name = data.get('screen_name', '')
+        metadata = data.get('metadata', {})
+        
+        # Map metric_name to event_type
+        event_type = 'screen_navigation'
+        if 'startup' in metric_name.lower() or 'launch' in metric_name.lower():
+            event_type = 'app_startup'
+        
+        # Extract device info from metadata if available
+        device_model = metadata.get('device_model', 'Android App')
+        
+        PerformanceEvent.objects.create(
+            event_type=event_type,
+            device_model=device_model,
+            platform=data.get('platform', 'android'),
+            duration_ms=float(value_ms),
+            timestamp=timezone.now(),
+            os_version=metadata.get('os_version', ''),
+            app_version=metadata.get('app_version', ''),
+        )
+    else:
+        # Legacy format
+        PerformanceEvent.objects.create(
+            event_type=data.get('event_type', 'screen_navigation'),
+            device_model=data.get('device_model', 'Unknown'),
+            platform=data.get('platform', 'android'),
+            duration_ms=data.get('duration_ms', 0),
+            timestamp=timezone.now(),
+            os_version=data.get('os_version', ''),
+            app_version=data.get('app_version', ''),
+        )
+    
     return JsonResponse({'status': 'ok'}, status=201)
 
 
@@ -1186,12 +1227,8 @@ def legacy_events_endpoint(request):
             except (TypeError, ValueError):
                 seller_id = None
 
-        avg_minutes = properties.get('avg_minutes')
-        if avg_minutes:
-            try:
-                avg_minutes = float(avg_minutes)
-            except (TypeError, ValueError):
-                avg_minutes = None
+        # Parse avg_minutes with default value 0.0
+        avg_minutes = float(properties.get('avg_minutes', 0.0))
 
         unread_count = properties.get('unread_conversations')
         if unread_count:
@@ -1353,6 +1390,7 @@ def bq4_dashboard(request):
     """
     Dashboard for BQ4: Average seller response time after buyer initiates contact.
     Shows messaging activity and seller responsiveness metrics.
+    Agrupado por seller_id para mostrar la eficiencia real del vendedor.
     """
     from marketplace_analytics.models import MessagingResponseEvent
     from django.db.models import Avg, Count, Min, Max
@@ -1360,11 +1398,12 @@ def bq4_dashboard(request):
     # Get time range (last 30 days by default)
     since = timezone.now() - timedelta(days=30)
 
-    # Get all response time events
+    # Get all response time events (filtrando por seller_id no nulo)
     response_events = MessagingResponseEvent.objects.filter(
         event_name='seller_avg_response_time',
         timestamp__gte=since,
-        avg_response_minutes__isnull=False
+        avg_response_minutes__isnull=False,
+        seller_id__isnull=False  # Solo eventos con seller_id
     )
 
     # Overall statistics
@@ -1375,33 +1414,46 @@ def bq4_dashboard(request):
         total_measurements=Count('id')
     )
 
-    # Response time by seller
+    # Response time by seller - AGRUPADO POR SELLER_ID
     by_seller = list(
+        response_events.values('seller_id')
+        .annotate(
+            avg_response=Avg('avg_response_minutes'),
+            min_response=Min('avg_response_minutes'),
+            max_response=Max('avg_response_minutes'),
+            measurements=Count('id')
+        )
+        .order_by('avg_response')[:15]  # Top 15 fastest sellers
+    )
+
+    # Sellers más lentos (para comparación)
+    slowest_sellers = list(
         response_events.values('seller_id')
         .annotate(
             avg_response=Avg('avg_response_minutes'),
             measurements=Count('id')
         )
-        .order_by('avg_response')[:10]  # Top 10 fastest sellers
+        .order_by('-avg_response')[:10]  # Top 10 slowest sellers
     )
 
-    # Messages screen activity
+    # Messages screen activity (por user_id)
     messages_opened = MessagingResponseEvent.objects.filter(
         event_name='messages_screen_opened',
         timestamp__gte=since
     )
 
     total_opens = messages_opened.count()
+    unique_users = messages_opened.values('user_id').distinct().count()
     avg_unread = messages_opened.aggregate(
         avg=Avg('unread_conversations'))['avg'] or 0
 
-    # Message sent activity
+    # Message sent activity (por user_id)
     messages_sent = MessagingResponseEvent.objects.filter(
         event_name='message_sent',
         timestamp__gte=since
     ).count()
 
-    # Daily trend
+    # Daily trend - agrupado por seller_id y fecha
     daily_response_times = list(
         response_events.annotate(date=TruncDate('timestamp'))
         .values('date')
@@ -1416,6 +1468,9 @@ def bq4_dashboard(request):
     slow_responses = response_events.filter(
         avg_response_minutes__gte=30).count()
 
+    # Unique sellers count
+    unique_sellers = response_events.values('seller_id').distinct().count()
+
     context = {
         'period_display': 'Last 30 Days',
         'total_measurements': overall_stats['total_measurements'] or 0,
@@ -1424,18 +1479,37 @@ def bq4_dashboard(request):
         'max_response_minutes': round(overall_stats['max_response'] or 0, 1),
 
         'total_messages_opened': total_opens,
+        'unique_users': unique_users,
         'avg_unread_conversations': round(avg_unread, 1),
         'total_messages_sent': messages_sent,
+        'unique_sellers': unique_sellers,
 
+        # Top fastest sellers (agrupado por seller_id)
         'seller_labels': [f"Seller {s['seller_id']}" for s in by_seller],
         'seller_response_times': [round(s['avg_response'], 1) for s in by_seller],
         'seller_measurements': [s['measurements'] for s in by_seller],
+
+        # Slowest sellers
+        'slowest_seller_labels': [f"Seller {s['seller_id']}" for s in slowest_sellers],
+        'slowest_seller_times': [round(s['avg_response'], 1) for s in slowest_sellers],
 
         'daily_labels': [d['date'].strftime('%b %d') for d in daily_response_times],
         'daily_values': [round(d['avg_response'], 1) for d in daily_response_times],
 
         'distribution_labels': ['< 5 min', '5-30 min', '> 30 min'],
         'distribution_values': [fast_responses, medium_responses, slow_responses],
+
+        # Tabla detallada de sellers
+        'seller_details': [
+            {
+                'seller_id': s['seller_id'],
+                'avg_response': round(s['avg_response'], 1),
+                'min_response': round(s.get('min_response', 0), 1),
+                'max_response': round(s.get('max_response', 0), 1),
+                'measurements': s['measurements']
+            }
+            for s in by_seller
+        ]
     }
 
     return render(request, 'bq4_dashboard.html', context)
@@ -1546,3 +1620,183 @@ def bq5_dashboard(request):
         'dist_values':         json.dumps(list(score_buckets.values())),
     }
     return render(request, 'bq5_dashboard.html', context)
+
+
+
+@csrf_exempt
+def bq10_campus_events_endpoint(request):
+    """
+    BQ10: Campus location events endpoint.
+    Accepts both legacy format (properties-based) and direct format from Android app.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'status': 'POST required'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        event_name = data.get('event_name', 'location_detected')
+        user_id = data.get('user_id', 0)
+        properties = data.get('properties', {})
+        metadata = data.get('metadata', {})
+        
+        # Merge properties and metadata for backwards compatibility
+        merged = {**properties, **metadata}
+        
+        # Parse timestamp - accept ISO string or epoch millis
+        timestamp_str = data.get('timestamp') or merged.get('timestamp')
+        timestamp = None
+        if timestamp_str:
+            try:
+                # Try ISO format first (from Android)
+                timestamp = parse_datetime(str(timestamp_str))
+            except:
+                pass
+            if not timestamp:
+                try:
+                    timestamp = datetime.fromtimestamp(int(timestamp_str) / 1000, tz=dt_timezone.utc)
+                except:
+                    pass
+        if not timestamp:
+            timestamp = timezone.now()
+        
+        from marketplace_analytics.models import CampusLocationEvent
+        
+        # Extract BQ10-specific fields - check both top-level and nested
+        building_name = (
+            data.get('building_name')
+            or data.get('building')
+            or merged.get('building_name')
+            or merged.get('building')
+            or 'Unknown'
+        )
+        
+        listing_id = data.get('listing_id') or merged.get('listing_id')
+        if listing_id is not None:
+            try:
+                listing_id = int(listing_id)
+            except:
+                listing_id = None
+        
+        seller_id = data.get('seller_id') or merged.get('seller_id')
+        if seller_id is not None:
+            try:
+                seller_id = int(seller_id)
+            except:
+                seller_id = None
+        
+        latitude = data.get('latitude') or merged.get('latitude')
+        if latitude is not None:
+            try:
+                latitude = float(latitude)
+            except:
+                latitude = None
+        
+        longitude = data.get('longitude') or merged.get('longitude')
+        if longitude is not None:
+            try:
+                longitude = float(longitude)
+            except:
+                longitude = None
+        
+        # Save to database
+        CampusLocationEvent.objects.create(
+            event_name=event_name,
+            user_id=user_id,
+            listing_id=listing_id,
+            seller_id=seller_id,
+            building_name=building_name,
+            latitude=latitude,
+            longitude=longitude,
+            timestamp=timestamp,
+            metadata=merged if merged else data
+        )
+        
+        return JsonResponse({
+            'status': 'ok',
+            'event_name': event_name,
+            'user_id': user_id,
+            'building': building_name,
+            'saved': True
+        }, status=201)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+
+
+def bq10_dashboard(request):
+    """
+    Dashboard for BQ10: Campus location-based interactions.
+    Shows which buildings generate the most marketplace activity.
+    """
+    from marketplace_analytics.models import CampusLocationEvent
+    from django.db.models import Count
+    
+    # Get time range (last 30 days by default)
+    since = timezone.now() - timedelta(days=30)
+    
+    # Get all campus events
+    campus_events = CampusLocationEvent.objects.filter(timestamp__gte=since)
+    
+    # Overall statistics
+    total_events = campus_events.count()
+    unique_users = campus_events.values('user_id').distinct().count()
+    unique_buildings = campus_events.values('building_name').distinct().count()
+    
+    # Events by building
+    by_building = list(
+        campus_events.values('building_name')
+        .annotate(
+            total_events=Count('id'),
+            unique_users=Count('user_id', distinct=True)
+        )
+        .order_by('-total_events')
+    )
+    
+    # Events by type
+    by_event_type = list(
+        campus_events.values('event_name')
+        .annotate(count=Count('id'))
+        .order_by('-count')
+    )
+    
+    # Daily trend
+    daily_events = list(
+        campus_events.annotate(date=TruncDate('timestamp'))
+        .values('date')
+        .annotate(count=Count('id'))
+        .order_by('date')
+    )
+    
+    # Top buildings with listings
+    buildings_with_listings = list(
+        campus_events.filter(listing_id__isnull=False)
+        .values('building_name')
+        .annotate(
+            listings_count=Count('listing_id', distinct=True),
+            interactions=Count('id')
+        )
+        .order_by('-interactions')[:10]
+    )
+    
+    context = {
+        'period_display': 'Last 30 Days',
+        'total_events': total_events,
+        'unique_users': unique_users,
+        'unique_buildings': unique_buildings,
+        
+        'building_labels': [b['building_name'] for b in by_building],
+        'building_event_counts': [b['total_events'] for b in by_building],
+        'building_user_counts': [b['unique_users'] for b in by_building],
+        
+        'event_type_labels': [e['event_name'] for e in by_event_type],
+        'event_type_counts': [e['count'] for e in by_event_type],
+        
+        'daily_labels': [d['date'].strftime('%b %d') for d in daily_events],
+        'daily_values': [d['count'] for d in daily_events],
+        
+        'top_buildings_table': buildings_with_listings,
+    }
+    
+    return render(request, 'bq10_dashboard.html', context)

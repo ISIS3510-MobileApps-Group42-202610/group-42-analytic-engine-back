@@ -248,3 +248,37 @@ class MessagingResponseEvent(models.Model):
     
     def __str__(self):
         return f'{self.event_name} - User {self.user_id} - {self.timestamp.isoformat()}'
+
+
+class CampusLocationEvent(models.Model):
+    """
+    BQ10: Tracks campus location-based interactions.
+    Stores events when users interact with listings while on campus.
+    """
+    
+    class EventName(models.TextChoices):
+        CAMPUS_BANNER_SHOWN = 'campus_banner_shown', 'Campus Banner Shown'
+        MEETING_POINT_SUGGESTED = 'meeting_point_suggested', 'Meeting Point Suggested'
+        LOCATION_DETECTED = 'location_detected', 'Location Detected'
+    
+    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
+    user_id = models.BigIntegerField(db_index=True)
+    listing_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    seller_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    building_name = models.CharField(max_length=100, db_index=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    timestamp = models.DateTimeField(db_index=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        ordering = ['-timestamp', '-id']
+        indexes = [
+            models.Index(fields=['event_name', 'timestamp'], name='bq10_event_time_idx'),
+            models.Index(fields=['building_name', 'timestamp'], name='bq10_building_time_idx'),
+            models.Index(fields=['user_id'], name='bq10_user_idx'),
+        ]
+    
+    def __str__(self):
+        return f'{self.event_name} - {self.building_name} - User {self.user_id}'
