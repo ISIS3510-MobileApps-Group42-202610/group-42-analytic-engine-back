@@ -73,7 +73,7 @@ def post_performance_event(request):
     """
     Post un evento de performance para el analytics engine.
     Acepta dos formatos:
-    
+
     Formato legacy (BQ2 original):
     {
         "event_type": "app_startup" o "screen_navigation",
@@ -83,7 +83,7 @@ def post_performance_event(request):
         "os_version": "14" (opcional),
         "app_version": "1.2.3" (opcional)
     }
-    
+
     Formato Android app (BQ2 desde BusinessAnalyticsTracker):
     {
         "event_type": "performance_metric",
@@ -111,15 +111,15 @@ def post_performance_event(request):
         value_ms = data.get('value_ms', 0)
         screen_name = data.get('screen_name', '')
         metadata = data.get('metadata', {})
-        
+
         # Map metric_name to event_type
         event_type = 'screen_navigation'
         if 'startup' in metric_name.lower() or 'launch' in metric_name.lower():
             event_type = 'app_startup'
-        
+
         # Extract device info from metadata if available
         device_model = metadata.get('device_model', 'Android App')
-        
+
         PerformanceEvent.objects.create(
             event_type=event_type,
             device_model=device_model,
@@ -140,7 +140,7 @@ def post_performance_event(request):
             os_version=data.get('os_version', ''),
             app_version=data.get('app_version', ''),
         )
-    
+
     return JsonResponse({'status': 'ok'}, status=201)
 
 
@@ -680,8 +680,10 @@ def bq12_dashboard(request):
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         error_message = _format_bq12_upstream_error(exc)
 
-    period_set = _build_bq12_period_axis(rows, grain, requested_start, requested_end)
-    period_labels = [_format_bq12_period_label(period, grain) for period in period_set]
+    period_set = _build_bq12_period_axis(
+        rows, grain, requested_start, requested_end)
+    period_labels = [_format_bq12_period_label(
+        period, grain) for period in period_set]
 
     faculty_set = sorted({row.get('faculty') or 'Unknown' for row in rows})
     phase_totals = {}
@@ -822,7 +824,8 @@ def _fetch_bq12_rows_chunked(
     cursor = start_date
 
     while cursor <= end_date:
-        chunk_end = min(end_date, cursor + timedelta(days=max_days_per_request - 1))
+        chunk_end = min(end_date, cursor +
+                        timedelta(days=max_days_per_request - 1))
         all_rows.extend(_fetch_bq12_rows(
             base_url=base_url,
             grain=grain,
@@ -1524,8 +1527,7 @@ def bq5_dashboard(request):
     from marketplace_analytics.models import AnalyticsEvent
 
     events_qs = AnalyticsEvent.objects.filter(
-        event_name=AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
-        metadata__seeded_bq5=True,
+        event_name=AnalyticsEvent.EventName.TRANSACTION_COMPLETED
     )
 
     all_events_list = list(events_qs.values(
@@ -1622,7 +1624,6 @@ def bq5_dashboard(request):
     return render(request, 'bq5_dashboard.html', context)
 
 
-
 @csrf_exempt
 def bq10_campus_events_endpoint(request):
     """
@@ -1631,17 +1632,17 @@ def bq10_campus_events_endpoint(request):
     """
     if request.method != 'POST':
         return JsonResponse({'status': 'POST required'}, status=405)
-    
+
     try:
         data = json.loads(request.body)
         event_name = data.get('event_name', 'location_detected')
         user_id = data.get('user_id', 0)
         properties = data.get('properties', {})
         metadata = data.get('metadata', {})
-        
+
         # Merge properties and metadata for backwards compatibility
         merged = {**properties, **metadata}
-        
+
         # Parse timestamp - accept ISO string or epoch millis
         timestamp_str = data.get('timestamp') or merged.get('timestamp')
         timestamp = None
@@ -1653,14 +1654,15 @@ def bq10_campus_events_endpoint(request):
                 pass
             if not timestamp:
                 try:
-                    timestamp = datetime.fromtimestamp(int(timestamp_str) / 1000, tz=dt_timezone.utc)
+                    timestamp = datetime.fromtimestamp(
+                        int(timestamp_str) / 1000, tz=dt_timezone.utc)
                 except:
                     pass
         if not timestamp:
             timestamp = timezone.now()
-        
+
         from marketplace_analytics.models import CampusLocationEvent
-        
+
         # Extract BQ10-specific fields - check both top-level and nested
         building_name = (
             data.get('building_name')
@@ -1669,35 +1671,35 @@ def bq10_campus_events_endpoint(request):
             or merged.get('building')
             or 'Unknown'
         )
-        
+
         listing_id = data.get('listing_id') or merged.get('listing_id')
         if listing_id is not None:
             try:
                 listing_id = int(listing_id)
             except:
                 listing_id = None
-        
+
         seller_id = data.get('seller_id') or merged.get('seller_id')
         if seller_id is not None:
             try:
                 seller_id = int(seller_id)
             except:
                 seller_id = None
-        
+
         latitude = data.get('latitude') or merged.get('latitude')
         if latitude is not None:
             try:
                 latitude = float(latitude)
             except:
                 latitude = None
-        
+
         longitude = data.get('longitude') or merged.get('longitude')
         if longitude is not None:
             try:
                 longitude = float(longitude)
             except:
                 longitude = None
-        
+
         # Save to database
         CampusLocationEvent.objects.create(
             event_name=event_name,
@@ -1710,7 +1712,7 @@ def bq10_campus_events_endpoint(request):
             timestamp=timestamp,
             metadata=merged if merged else data
         )
-        
+
         return JsonResponse({
             'status': 'ok',
             'event_name': event_name,
@@ -1718,7 +1720,7 @@ def bq10_campus_events_endpoint(request):
             'building': building_name,
             'saved': True
         }, status=201)
-        
+
     except json.JSONDecodeError:
         return JsonResponse({'status': 'Invalid JSON'}, status=400)
     except Exception as e:
@@ -1732,18 +1734,18 @@ def bq10_dashboard(request):
     """
     from marketplace_analytics.models import CampusLocationEvent
     from django.db.models import Count
-    
+
     # Get time range (last 30 days by default)
     since = timezone.now() - timedelta(days=30)
-    
+
     # Get all campus events
     campus_events = CampusLocationEvent.objects.filter(timestamp__gte=since)
-    
+
     # Overall statistics
     total_events = campus_events.count()
     unique_users = campus_events.values('user_id').distinct().count()
     unique_buildings = campus_events.values('building_name').distinct().count()
-    
+
     # Events by building
     by_building = list(
         campus_events.values('building_name')
@@ -1753,14 +1755,14 @@ def bq10_dashboard(request):
         )
         .order_by('-total_events')
     )
-    
+
     # Events by type
     by_event_type = list(
         campus_events.values('event_name')
         .annotate(count=Count('id'))
         .order_by('-count')
     )
-    
+
     # Daily trend
     daily_events = list(
         campus_events.annotate(date=TruncDate('timestamp'))
@@ -1768,7 +1770,7 @@ def bq10_dashboard(request):
         .annotate(count=Count('id'))
         .order_by('date')
     )
-    
+
     # Top buildings with listings
     buildings_with_listings = list(
         campus_events.filter(listing_id__isnull=False)
@@ -1779,24 +1781,24 @@ def bq10_dashboard(request):
         )
         .order_by('-interactions')[:10]
     )
-    
+
     context = {
         'period_display': 'Last 30 Days',
         'total_events': total_events,
         'unique_users': unique_users,
         'unique_buildings': unique_buildings,
-        
+
         'building_labels': [b['building_name'] for b in by_building],
         'building_event_counts': [b['total_events'] for b in by_building],
         'building_user_counts': [b['unique_users'] for b in by_building],
-        
+
         'event_type_labels': [e['event_name'] for e in by_event_type],
         'event_type_counts': [e['count'] for e in by_event_type],
-        
+
         'daily_labels': [d['date'].strftime('%b %d') for d in daily_events],
         'daily_values': [d['count'] for d in daily_events],
-        
+
         'top_buildings_table': buildings_with_listings,
     }
-    
+
     return render(request, 'bq10_dashboard.html', context)
