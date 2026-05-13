@@ -11,6 +11,8 @@ from marketplace_analytics.models import MessagingResponseEvent
 
 class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(source='occurred_at', required=False)
+    event_name = serializers.CharField()
+    listing_id = serializers.IntegerField(required=False, default=0)
 
     EVENT_ALIASES = {
         'listing_opened': AnalyticsEvent.EventName.LISTING_VIEWED,
@@ -60,9 +62,16 @@ class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        event_name = attrs.get('event_name')
+        event_name = (attrs.get('event_name') or '').strip().lower()
         buyer_user_id = attrs.get('buyer_user_id')
         seller_user_id = attrs.get('seller_user_id')
+        attrs['event_name'] = event_name
+
+        if not event_name:
+            raise serializers.ValidationError('event_name is required.')
+
+        if attrs.get('listing_id') is None:
+            attrs['listing_id'] = 0
 
         if event_name == AnalyticsEvent.EventName.FIRST_MESSAGE_SENT:
             if not buyer_user_id or not seller_user_id:

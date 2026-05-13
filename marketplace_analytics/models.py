@@ -90,8 +90,8 @@ class AnalyticsEvent(models.Model):
         FIRST_MESSAGE_SENT = 'first_message_sent', 'First Message Sent'
         TRANSACTION_COMPLETED = 'transaction_completed', 'Transaction Completed'
 
-    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
-    listing_id = models.BigIntegerField(db_index=True)
+    event_name = models.CharField(max_length=64, db_index=True)
+    listing_id = models.BigIntegerField(default=0, db_index=True)
     buyer_user_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     seller_user_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     occurred_at = models.DateTimeField(db_index=True)

@@ -22,7 +22,8 @@ def ingest_business_event(validated_event_data):
     Persist a validated analytics event and update listing-level aggregate state.
     """
     event = AnalyticsEvent.objects.create(**validated_event_data)
-    _upsert_listing_state_from_event(event)
+    if event.listing_id and event.listing_id > 0:
+        _upsert_listing_state_from_event(event)
     return event
 
 
@@ -169,6 +170,7 @@ def calculate_q9_messaging_impact_metric_with_filters(
 def _population_listing_ids_for_window(since=None, until=None):
     events = (
         AnalyticsEvent.objects
+        .filter(listing_id__gt=0)
         .values('listing_id')
         .annotate(first_seen_at=Min('occurred_at'))
     )

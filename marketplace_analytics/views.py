@@ -16,15 +16,17 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import AuthenticationFailed, ValidationError
 
 from marketplace_analytics.authentication import (
     JWTIngestionAuthentication,
     ApiKeyAuthentication,
     StaticTokenAuthentication,
+    authenticate_ingestion_request,
+    ingestion_auth_is_configured,
 )
 from marketplace_analytics.models import PerformanceEvent
 from marketplace_analytics.serializers import (
@@ -65,7 +67,36 @@ BUSINESS_EVENT_NAMES_AND_ALIASES = {
     'listing_sold',
     'product_sold',
     'reservation_completed',
+    'session_started',
+    'screen_opened',
+    'app_error_reported',
+    'app_crash_reported',
+    'catalog_load_failed',
+    'network_request_failed',
 }
+
+
+BUSINESS_EVENT_METADATA_KEYS = {
+    'screen_name',
+    'feature_name',
+    'exception_type',
+    'error_message_hash',
+    'stack_trace_hash',
+    'device_model',
+    'manufacturer',
+    'android_version',
+    'sdk_int',
+    'app_version',
+    'timestamp',
+    'network_status',
+}
+
+
+class AnalyticsIngestionPermission(BasePermission):
+    def has_permission(self, request, view):
+        if not ingestion_auth_is_configured():
+            return True
+        return bool(request.user and request.user.is_authenticated)
 
 
 @csrf_exempt
@@ -894,8 +925,12 @@ class BusinessEventIngestionAPIView(APIView):
     Ingest business-relevant analytics events from Android/iOS clients.
     """
 
-    authentication_classes = ()
-    permission_classes = (AllowAny,)
+    authentication_classes = (
+        JWTIngestionAuthentication,
+        ApiKeyAuthentication,
+        StaticTokenAuthentication,
+    )
+    permission_classes = (AnalyticsIngestionPermission,)
 
     def post(self, request):
         serializer = AnalyticsEventIngestSerializer(
@@ -988,19 +1023,58 @@ def _normalize_business_event_payload(data):
     {"event_name": "...", "user_id": 1, "properties": {...}}.
     """
     payload = data.copy()
-    properties = payload.get('properties') or payload.get('metadata') or {}
+    properties = payload.get('properties') or {}
+    metadata = payload.get('metadata') or {}
     if not isinstance(properties, dict):
         properties = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    merged_metadata = {**metadata, **properties}
 
     def first_value(*keys):
         for key in keys:
             value = payload.get(key)
             if value not in (None, ''):
                 return value
-            value = properties.get(key)
+            value = merged_metadata.get(key)
             if value not in (None, ''):
                 return value
         return None
+
+    reserved_keys = {
+        'event_name',
+        'name',
+        'type',
+        'listing_id',
+        'listingId',
+        'product_id',
+        'productId',
+        'buyer_user_id',
+        'buyerUserId',
+        'buyer_id',
+        'buyerId',
+        'seller_user_id',
+        'sellerUserId',
+        'seller_id',
+        'sellerId',
+        'user_id',
+        'userId',
+        'timestamp',
+        'occurred_at',
+        'occurredAt',
+        'client_event_id',
+        'clientEventId',
+        'event_id',
+        'eventId',
+        'properties',
+        'metadata',
+    }
+
+    for key, value in payload.items():
+        if key in reserved_keys or value in (None, ''):
+            continue
+        merged_metadata.setdefault(key, value)
 
     normalized = {
         'event_name': first_value('event_name', 'name', 'type'),
@@ -1008,12 +1082,15 @@ def _normalize_business_event_payload(data):
         'buyer_user_id': first_value('buyer_user_id', 'buyerUserId', 'buyer_id', 'buyerId'),
         'seller_user_id': first_value('seller_user_id', 'sellerUserId', 'seller_id', 'sellerId'),
         'timestamp': first_value('timestamp', 'occurred_at', 'occurredAt'),
-        'metadata': properties,
+        'metadata': merged_metadata,
         'client_event_id': first_value('client_event_id', 'clientEventId', 'event_id', 'eventId'),
     }
 
     if normalized['buyer_user_id'] is None:
         normalized['buyer_user_id'] = first_value('user_id', 'userId')
+
+    if normalized['listing_id'] is None:
+        normalized['listing_id'] = 0
 
     timestamp = normalized.get('timestamp')
     if isinstance(timestamp, (int, float)) or (isinstance(timestamp, str) and timestamp.isdigit()):
@@ -1021,6 +1098,14 @@ def _normalize_business_event_payload(data):
             int(timestamp) / 1000,
             tz=dt_timezone.utc,
         ).isoformat()
+
+    if normalized.get('timestamp'):
+        normalized['metadata']['timestamp'] = normalized['timestamp']
+
+    for key in BUSINESS_EVENT_METADATA_KEYS:
+        value = first_value(key)
+        if value not in (None, ''):
+            normalized['metadata'][key] = value
 
     return {
         key: value
@@ -1138,6 +1223,11 @@ def legacy_events_endpoint(request):
     """
     if request.method != 'POST':
         return JsonResponse({'status': 'POST required'}, status=405)
+
+    try:
+        authenticate_ingestion_request(request)
+    except AuthenticationFailed as exc:
+        return JsonResponse({'detail': str(exc)}, status=401)
 
     try:
         data = json.loads(request.body)

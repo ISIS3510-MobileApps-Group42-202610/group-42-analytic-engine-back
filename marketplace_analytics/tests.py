@@ -4,6 +4,7 @@ from unittest.mock import patch
 from django.db import ProgrammingError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.test.utils import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -18,7 +19,9 @@ from marketplace_analytics.views import _build_bq12_period_axis, _normalize_bq12
 class BusinessEventIngestionTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.auth_headers = {'HTTP_AUTHORIZATION': 'Token test-analytics-token'}
 
+    @override_settings(ANALYTICS_INGEST_TOKEN='test-analytics-token')
     def test_transaction_completed_updates_listing_state(self):
         response = self.client.post(
             reverse('business-event-ingestion'),
@@ -29,6 +32,7 @@ class BusinessEventIngestionTests(TestCase):
                 'seller_user_id': 20,
             },
             format='json',
+            **self.auth_headers,
         )
 
         self.assertEqual(response.status_code, 201)
@@ -36,6 +40,7 @@ class BusinessEventIngestionTests(TestCase):
         self.assertTrue(state.is_transaction_completed)
         self.assertIsNotNone(state.transaction_completed_at)
 
+    @override_settings(ANALYTICS_INGEST_TOKEN='test-analytics-token')
     def test_android_legacy_transaction_alias_updates_listing_state(self):
         response = self.client.post(
             reverse('legacy-events'),
@@ -49,12 +54,67 @@ class BusinessEventIngestionTests(TestCase):
                 },
             },
             format='json',
+            **self.auth_headers,
         )
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()['target'], 'business_events')
         state = ListingAnalyticsState.objects.get(listing_id=1002)
         self.assertTrue(state.is_transaction_completed)
+
+    @override_settings(ANALYTICS_INGEST_TOKEN='test-analytics-token')
+    def test_non_listing_event_accepts_listing_zero_and_freeform_metadata(self):
+        now = timezone.now()
+        response = self.client.post(
+            reverse('business-event-ingestion'),
+            {
+                'event_name': 'network_request_failed',
+                'listing_id': 0,
+                'buyer_user_id': None,
+                'seller_user_id': None,
+                'timestamp': now.isoformat(),
+                'screen_name': 'CatalogScreen',
+                'feature_name': 'catalog',
+                'exception_type': 'SocketTimeoutException',
+                'error_message_hash': 'err-hash',
+                'stack_trace_hash': 'stack-hash',
+                'device_model': 'Pixel 8',
+                'manufacturer': 'Google',
+                'android_version': '14',
+                'sdk_int': 34,
+                'app_version': '1.2.3',
+                'network_status': 'offline',
+                'metadata': {
+                    'request_path': '/catalog',
+                    'http_status': 504,
+                },
+            },
+            format='json',
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        event = AnalyticsEvent.objects.get(pk=response.json()['event_id'])
+        self.assertEqual(event.event_name, 'network_request_failed')
+        self.assertEqual(event.listing_id, 0)
+        self.assertFalse(ListingAnalyticsState.objects.filter(listing_id=0).exists())
+        self.assertEqual(event.metadata['screen_name'], 'CatalogScreen')
+        self.assertEqual(event.metadata['feature_name'], 'catalog')
+        self.assertEqual(event.metadata['network_status'], 'offline')
+        self.assertEqual(event.metadata['request_path'], '/catalog')
+
+    @override_settings(ANALYTICS_INGEST_TOKEN='test-analytics-token')
+    def test_business_event_endpoint_requires_auth_when_token_is_configured(self):
+        response = self.client.post(
+            reverse('business-event-ingestion'),
+            {
+                'event_name': 'session_started',
+                'listing_id': 0,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 403)
 
 
 class Q9MetricTests(TestCase):
@@ -131,6 +191,13 @@ class Q9MetricTests(TestCase):
         self.assertEqual(report['group_without_messaging']['completed'], 0)
         self.assertEqual(report['total_completed'], 0)
 
+    @override_settings(
+        STORAGES={
+            'staticfiles': {
+                'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            },
+        }
+    )
     def test_q9_dashboard_completed_sales_cards_show_counts_not_share_percentages(self):
         now = timezone.now()
 

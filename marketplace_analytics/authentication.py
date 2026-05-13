@@ -99,3 +99,36 @@ class JWTIngestionAuthentication(authentication.BaseAuthentication):
             raise AuthenticationFailed(f'Invalid JWT token: {exc}')
 
         return ServicePrincipal(auth_type='jwt'), claims
+
+
+def ingestion_auth_is_configured():
+    return any(
+        (
+            getattr(settings, 'ANALYTICS_INGEST_TOKEN', ''),
+            getattr(settings, 'ANALYTICS_API_KEY', ''),
+            getattr(settings, 'ANALYTICS_JWT_SECRET', ''),
+        )
+    )
+
+
+def authenticate_ingestion_request(request):
+    """
+    Authenticate a Django request against the ingestion auth backends.
+
+    Returns None when ingestion auth is disabled. Raises AuthenticationFailed
+    when auth is enabled but the request does not provide valid credentials.
+    """
+    if not ingestion_auth_is_configured():
+        return None
+
+    for authenticator_class in (
+        JWTIngestionAuthentication,
+        ApiKeyAuthentication,
+        StaticTokenAuthentication,
+    ):
+        authenticator = authenticator_class()
+        result = authenticator.authenticate(request)
+        if result is not None:
+            return result
+
+    raise AuthenticationFailed('Authentication credentials were not provided.')
