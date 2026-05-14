@@ -21,6 +21,8 @@ from marketplace_analytics.views import (
     BQ6SellerResponseTimeAPIView,
     BQ1CrashEventIngestionAPIView,
     BQ1CrashHotspotAPIView,
+    bq10_campus_events_endpoint,
+    bq10_dashboard,
 )
 
 urlpatterns = [
@@ -64,6 +66,8 @@ urlpatterns = [
     # ====== BQ5 Most Reliable Sellers ==========
     path('api/dashboard/bq5', bq5_dashboard, name='bq5-dashboard'),
 
-
+    # ====== BQ10 Campus Location Events ==========
+    path('api/bq10/events/', bq10_campus_events_endpoint, name='bq10-campus-events'),
+    path('api/dashboard/bq10', bq10_dashboard, name='bq10-dashboard'),
 
 ]

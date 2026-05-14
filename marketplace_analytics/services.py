@@ -1,15 +1,12 @@
 from datetime import datetime, timedelta
 
 from django.db import ProgrammingError, transaction
-from django.db.models import Avg
-from django.db.models import Count
-from django.db.models import Min
-from django.db.models import Max
+from django.db.models import Avg, Count, Max, Min, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from collections import defaultdict
 from statistics import median
-from typing import cast
+from typing import Iterable, TypedDict, cast
 
 from marketplace_analytics.models import CrashEvent, AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
 
@@ -93,26 +90,29 @@ def calculate_q9_messaging_impact_metric_with_filters(
     """
     Calculate Q9 metric with optional date filtering over the analytics event stream.
 
-    Date window controls the analysis population: listings with any event in the range.
-    Completion still uses listing final backend state (ListingAnalyticsState).
+    Date window controls the analysis population: listings whose first known
+    business event occurred in the range. Cohort grouping uses listing-level
+    state so a listing does not move between cohorts when the period changes.
+    For bounded periods, completion is counted only when the transaction was
+    completed inside the same reporting window.
     """
     population_listing_ids = _population_listing_ids_for_window(since=since, until=until)
 
     listing_states = ListingAnalyticsState.objects.filter(listing_id__in=population_listing_ids)
 
-    messaging_listing_ids = _messaging_listing_ids_for_window(since=since, until=until)
+    completed_filter = _completed_filter_for_window(since=since, until=until)
 
-    with_messaging = listing_states.filter(listing_id__in=messaging_listing_ids)
-    without_messaging = listing_states.exclude(listing_id__in=messaging_listing_ids)
+    with_messaging = listing_states.filter(has_messaging_interaction=True)
+    without_messaging = listing_states.filter(has_messaging_interaction=False)
 
     with_total = with_messaging.count()
-    with_completed = with_messaging.filter(is_transaction_completed=True).count()
+    with_completed = with_messaging.filter(completed_filter).count()
 
     without_total = without_messaging.count()
-    without_completed = without_messaging.filter(is_transaction_completed=True).count()
+    without_completed = without_messaging.filter(completed_filter).count()
 
-    with_rate = (with_completed / with_total) if with_total else None
-    without_rate = (without_completed / without_total) if without_total else None
+    with_rate = _safe_ratio(with_completed, with_total)
+    without_rate = _safe_ratio(without_completed, without_total)
 
     absolute_difference = None
     relative_lift_percentage = None
@@ -121,6 +121,10 @@ def calculate_q9_messaging_impact_metric_with_filters(
         absolute_difference = with_rate - without_rate
         if without_rate > 0:
             relative_lift_percentage = ((with_rate - without_rate) / without_rate) * 100
+
+    total_completed = with_completed + without_completed
+    with_completed_share = _safe_ratio(with_completed, total_completed)
+    without_completed_share = _safe_ratio(without_completed, total_completed)
 
     return {
         'period': {
@@ -132,12 +136,16 @@ def calculate_q9_messaging_impact_metric_with_filters(
             'listings': with_total,
             'completed': with_completed,
             'completion_rate': with_rate,
+            'completed_share': with_completed_share,
         },
         'group_without_messaging': {
             'listings': without_total,
             'completed': without_completed,
             'completion_rate': without_rate,
+            'completed_share': without_completed_share,
         },
+        'total_listings': with_total + without_total,
+        'total_completed': total_completed,
         'absolute_difference': absolute_difference,
         'relative_lift_percentage': relative_lift_percentage,
         'definitions': {
@@ -150,33 +158,34 @@ def calculate_q9_messaging_impact_metric_with_filters(
                 'messaging interaction for Q9 grouping.'
             ),
             'completed_transaction': (
-                'ListingAnalyticsState.is_transaction_completed = true '
-                '(updated by transaction_completed business events).'
+                'ListingAnalyticsState.is_transaction_completed = true. '
+                'For bounded periods, transaction_completed_at must be inside '
+                'the selected reporting window.'
             ),
         },
     }
 
 
 def _population_listing_ids_for_window(since=None, until=None):
-    events = AnalyticsEvent.objects.all()
-    if since is not None:
-        events = events.filter(occurred_at__gte=since)
-    if until is not None:
-        events = events.filter(occurred_at__lte=until)
-    return events.values_list('listing_id', flat=True).distinct()
-
-
-def _messaging_listing_ids_for_window(since=None, until=None):
-    messaging_events = AnalyticsEvent.objects.filter(
-        event_name=AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
-        buyer_user_id__isnull=False,
-        seller_user_id__isnull=False,
+    events = (
+        AnalyticsEvent.objects
+        .values('listing_id')
+        .annotate(first_seen_at=Min('occurred_at'))
     )
     if since is not None:
-        messaging_events = messaging_events.filter(occurred_at__gte=since)
+        events = events.filter(first_seen_at__gte=since)
     if until is not None:
-        messaging_events = messaging_events.filter(occurred_at__lte=until)
-    return messaging_events.values_list('listing_id', flat=True).distinct()
+        events = events.filter(first_seen_at__lte=until)
+    return events.values_list('listing_id', flat=True)
+
+
+def _completed_filter_for_window(since=None, until=None):
+    completed_filter = Q(is_transaction_completed=True)
+    if since is not None:
+        completed_filter &= Q(transaction_completed_at__gte=since)
+    if until is not None:
+        completed_filter &= Q(transaction_completed_at__lte=until)
+    return completed_filter
 
 
 def resolve_reporting_window(period: str, start=None, end=None):
@@ -279,17 +288,18 @@ def calculate_bq1_crash_hotspot_metric(
             {
                 'label': label,
                 'count': count,
-                'percentage': round((count / total_crashes) * 100, 2) if total_crashes else 0,
+                'percentage': round((int(count) / total_crashes) * 100, 2) if total_crashes else 0,
             }
             for label, count in sorted(counter.items(), key=lambda item: (-item[1], item[0].lower()))
         ]
 
     top_hotspots = []
     for label, data in sorted(hotspot_counts.items(), key=lambda item: (-item[1]['count'], item[0].lower()))[:10]:
+        hotspot_count = int(data['count'] or 0)
         top_hotspots.append({
             'label': label,
-            'count': data['count'],
-            'percentage': round((data['count'] / total_crashes) * 100, 2) if total_crashes else 0,
+            'count': hotspot_count,
+            'percentage': round((hotspot_count / total_crashes) * 100, 2) if total_crashes else 0,
             'feature_name': data['feature_name'] or 'Unknown feature',
             'code_location': data['code_location'] or 'Unknown location',
             'crash_signature': data['crash_signature'] or 'Unknown signature',
@@ -423,7 +433,14 @@ def calculate_bq3_search_to_interaction_metric(
     completed_sessions = []
     elapsed_seconds = []
 
-    breakdown: dict[str, dict[str, float | int | None]] = defaultdict(lambda: {
+    class _FilterBreakdownRow(TypedDict):
+        sessions_started: int
+        sessions_with_interaction: int
+        avg_seconds_to_interaction: float | None
+        median_seconds_to_interaction: float | None
+        interaction_rate: float | None
+
+    breakdown: defaultdict[str, _FilterBreakdownRow] = defaultdict(lambda: {
         'sessions_started': 0,
         'sessions_with_interaction': 0,
         'avg_seconds_to_interaction': None,
@@ -459,10 +476,9 @@ def calculate_bq3_search_to_interaction_metric(
         ]
         data['avg_seconds_to_interaction'] = _safe_avg(filter_elapsed)
         data['median_seconds_to_interaction'] = _safe_median(filter_elapsed)
-        data['interaction_rate'] = (
-            data['sessions_with_interaction'] / data['sessions_started']
-            if data['sessions_started'] else None
-        )
+        sessions_started = int(data['sessions_started'] or 0)
+        sessions_with_interaction = int(data['sessions_with_interaction'] or 0)
+        data['interaction_rate'] = _safe_ratio(sessions_with_interaction, sessions_started)
 
     return {
         'period': {
@@ -481,10 +497,7 @@ def calculate_bq3_search_to_interaction_metric(
         ],
         'search_sessions_started': len(started_sessions),
         'search_sessions_with_meaningful_interaction': len(completed_sessions),
-        'interaction_rate': (
-            len(completed_sessions) / len(started_sessions)
-            if started_sessions else None
-        ),
+        'interaction_rate': _safe_ratio(len(completed_sessions), len(started_sessions)),
         'avg_seconds_to_first_interaction': _safe_avg(elapsed_seconds),
         'median_seconds_to_first_interaction': _safe_median(elapsed_seconds),
         'p90_seconds_to_first_interaction': _percentile(elapsed_seconds, 90),
@@ -566,9 +579,11 @@ def calculate_bq6_seller_response_time_metric(
         or 0
     )
 
-    values = list(
-        response_events.values_list('avg_response_minutes', flat=True)
-    )
+    values = [
+        float(value)
+        for value in response_events.values_list('avg_response_minutes', flat=True)
+        if value is not None
+    ]
 
     distribution_buckets = {
         'under_5_min': response_events.filter(avg_response_minutes__lt=5).count(),
@@ -618,19 +633,28 @@ def _resolve_filter_type(event: SearchDiscoveryEvent) -> str:
     return SearchDiscoveryEvent.FilterType.NONE
 
 
-def _safe_avg(values):
+def _safe_avg(values: Iterable[float | int]):
+    values = list(values)
     if not values:
         return None
     return sum(values) / len(values)
 
 
-def _safe_median(values):
+def _safe_ratio(numerator: float | int, denominator: float | int) -> float | None:
+    if denominator == 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _safe_median(values: Iterable[float | int]):
+    values = list(values)
     if not values:
         return None
-    return median(values)
+    return float(median(values))
 
 
-def _percentile(values, percentile_rank):
+def _percentile(values: Iterable[float | int], percentile_rank: float):
+    values = list(values)
     if not values:
         return None
 

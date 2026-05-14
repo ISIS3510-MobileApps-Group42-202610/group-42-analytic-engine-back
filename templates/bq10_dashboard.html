@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}BQ10: Campus Location Analytics - Dashboard{% endblock %}
+{% block nav_bq10 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-header">
+    <div class="bq-box">
+        <h3>Business Question 10 (Smart Feature)</h3>
+        <p>Which campus buildings generate the most marketplace interactions?</p>
+    </div>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+</div>
+
+<h2 class="section-title">Campus Activity Overview <span class="peak-badge">{{ period_display }}</span></h2>
+
+<div class="cards">
+    <div class="card">
+        <div class="label">Total Events</div>
+        <div class="value">{{ total_events }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Unique Users</div>
+        <div class="value">{{ unique_users }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Active Buildings</div>
+        <div class="value">{{ unique_buildings }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Avg Events/User</div>
+        <div class="value">{{ total_events|floatformat:0|default:"0" }}</div>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Events by Building</h3>
+        <canvas id="buildingEventsChart"></canvas>
+    </div>
+    <div class="chart-box">
+        <h3>Event Types Distribution</h3>
+        <canvas id="eventTypesChart"></canvas>
+    </div>
+    <div class="chart-box full">
+        <h3>Daily Campus Activity Trend</h3>
+        <canvas id="dailyTrendChart"></canvas>
+    </div>
+</div>
+
+<h2 class="section-title">Top Buildings with Listing Interactions</h2>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Building Name</th>
+            <th>Unique Listings</th>
+            <th>Total Interactions</th>
+            <th>Avg Interactions/Listing</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for building in top_buildings_table %}
+        <tr>
+            <td><strong>{{ building.building_name }}</strong></td>
+            <td>{{ building.listings_count }}</td>
+            <td>{{ building.interactions }}</td>
+            <td>{{ building.interactions|floatformat:1 }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+            <td colspan="4" style="text-align: center; color: #999;">No data available</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="info-box">
+    <h4>📍 About BQ10: Campus Location Analytics</h4>
+    <p><strong>Smart Feature:</strong> This dashboard tracks marketplace interactions based on campus location.</p>
+    <p><strong>Event Types:</strong></p>
+    <ul>
+        <li><code>campus_banner_shown</code>: User saw the campus location banner</li>
+        <li><code>meeting_point_suggested</code>: System suggested a meeting point</li>
+        <li><code>location_detected</code>: User's location was detected on campus</li>
+    </ul>
+    <p><strong>Buildings Tracked:</strong> Mario Laserna (ML), Edificio SD, Edificio W, Edificio Cívico, Edificio Au, Biblioteca General</p>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Buildings bar chart
+    const buildingLabels = {{ building_labels|safe }};
+    const buildingEventCounts = {{ building_event_counts|safe }};
+    const buildingUserCounts = {{ building_user_counts|safe }};
+    
+    const buildingCtx = document.getElementById('buildingEventsChart').getContext('2d');
+    new Chart(buildingCtx, {
+        type: 'bar',
+        data: {
+            labels: buildingLabels,
+            datasets: [
+                {
+                    label: 'Total Events',
+                    data: buildingEventCounts,
+                    backgroundColor: '#4f46e5',
+                    borderColor: '#4338ca',
+                    borderWidth: 1
+                },
+                {
+                    label: 'Unique Users',
+                    data: buildingUserCounts,
+                    backgroundColor: '#10b981',
+                    borderColor: '#059669',
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { precision: 0 }
+                }
+            },
+            plugins: {
+                legend: { position: 'top' }
+            }
+        }
+    });
+    
+    // Event types pie chart
+    const eventTypeLabels = {{ event_type_labels|safe }};
+    const eventTypeCounts = {{ event_type_counts|safe }};
+    
+    const eventTypeCtx = document.getElementById('eventTypesChart').getContext('2d');
+    new Chart(eventTypeCtx, {
+        type: 'pie',
+        data: {
+            labels: eventTypeLabels,
+            datasets: [{
+                data: eventTypeCounts,
+                backgroundColor: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+    
+    // Daily trend line chart
+    const dailyLabels = {{ daily_labels|safe }};
+    const dailyValues = {{ daily_values|safe }};
+    
+    createLineChart('dailyTrendChart', dailyLabels, dailyValues, 'Events per Day', '#4f46e5');
+</script>
+{% endblock %}

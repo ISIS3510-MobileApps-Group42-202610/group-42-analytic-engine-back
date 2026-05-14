@@ -48,7 +48,7 @@ class CrashEvent(models.Model):
 
     PLATFORM_CHOICES = PerformanceEvent.PLATFORM_CHOICES
 
-    event_name = models.CharField(max_length=30, choices=EventName, db_index=True)
+    event_name = models.CharField(max_length=30, choices=EventName.choices, db_index=True)
     feature_name = models.CharField(max_length=120, blank=True, default='', db_index=True)
     code_location = models.CharField(max_length=255, blank=True, default='', db_index=True)
     crash_signature = models.CharField(max_length=255, db_index=True)
@@ -90,7 +90,7 @@ class AnalyticsEvent(models.Model):
         FIRST_MESSAGE_SENT = 'first_message_sent', 'First Message Sent'
         TRANSACTION_COMPLETED = 'transaction_completed', 'Transaction Completed'
 
-    event_name = models.CharField(max_length=50, choices=EventName, db_index=True)
+    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
     listing_id = models.BigIntegerField(db_index=True)
     buyer_user_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     seller_user_id = models.BigIntegerField(null=True, blank=True, db_index=True)
@@ -174,7 +174,7 @@ class SearchDiscoveryEvent(models.Model):
 
     event_name = models.CharField(
         max_length=32,
-        choices=EventName,
+        choices=EventName.choices,
         db_index=True,
     )
 
@@ -188,7 +188,7 @@ class SearchDiscoveryEvent(models.Model):
 
     selected_filter_type = models.CharField(
         max_length=20,
-        choices=FilterType,
+        choices=FilterType.choices,
         default=FilterType.NONE,
         db_index=True,
     )
@@ -229,7 +229,7 @@ class MessagingResponseEvent(models.Model):
         SELLER_AVG_RESPONSE_TIME = 'seller_avg_response_time', 'Seller Avg Response Time'
         FIRST_MESSAGE_SENT = 'first_message_sent', 'First Message Sent'
     
-    event_name = models.CharField(max_length=50, choices=EventName, db_index=True)
+    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
     user_id = models.BigIntegerField(db_index=True)
     seller_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     avg_response_minutes = models.FloatField(null=True, blank=True, help_text='Average response time in minutes')
@@ -248,3 +248,37 @@ class MessagingResponseEvent(models.Model):
     
     def __str__(self):
         return f'{self.event_name} - User {self.user_id} - {self.timestamp.isoformat()}'
+
+
+class CampusLocationEvent(models.Model):
+    """
+    BQ10: Tracks campus location-based interactions.
+    Stores events when users interact with listings while on campus.
+    """
+    
+    class EventName(models.TextChoices):
+        CAMPUS_BANNER_SHOWN = 'campus_banner_shown', 'Campus Banner Shown'
+        MEETING_POINT_SUGGESTED = 'meeting_point_suggested', 'Meeting Point Suggested'
+        LOCATION_DETECTED = 'location_detected', 'Location Detected'
+    
+    event_name = models.CharField(max_length=50, choices=EventName.choices, db_index=True)
+    user_id = models.BigIntegerField(db_index=True)
+    listing_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    seller_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    building_name = models.CharField(max_length=100, db_index=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    timestamp = models.DateTimeField(db_index=True)
+    ingested_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        ordering = ['-timestamp', '-id']
+        indexes = [
+            models.Index(fields=['event_name', 'timestamp'], name='bq10_event_time_idx'),
+            models.Index(fields=['building_name', 'timestamp'], name='bq10_building_time_idx'),
+            models.Index(fields=['user_id'], name='bq10_user_idx'),
+        ]
+    
+    def __str__(self):
+        return f'{self.event_name} - {self.building_name} - User {self.user_id}'
