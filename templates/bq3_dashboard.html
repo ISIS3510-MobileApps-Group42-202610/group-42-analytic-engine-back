@@ -70,18 +70,6 @@
         <div class="value">{{ avg_seconds_to_first_interaction }} <span class="unit">s</span></div>
         <div class="subline">Average elapsed time per completed session</div>
     </div>
-
-    <div class="card">
-        <div class="label">Median Time</div>
-        <div class="value">{{ median_seconds_to_first_interaction }} <span class="unit">s</span></div>
-        <div class="subline">Median elapsed time</div>
-    </div>
-
-    <div class="card">
-        <div class="label">P90 Time</div>
-        <div class="value">{{ p90_seconds_to_first_interaction }} <span class="unit">s</span></div>
-        <div class="subline">90th percentile time to interaction</div>
-    </div>
 </div>
 
 {% if search_sessions_started == 0 %}
@@ -95,16 +83,6 @@
 </div>
 {% else %}
 <div class="charts">
-    <div class="chart-box">
-        <h3>Interaction Rate by Filter Type</h3>
-        <canvas id="bq3RateByFilterChart"></canvas>
-    </div>
-
-    <div class="chart-box">
-        <h3>Average Time by Filter Type</h3>
-        <canvas id="bq3AvgTimeByFilterChart"></canvas>
-    </div>
-
     <div class="chart-box">
         <h3>Time Distribution to First Interaction</h3>
         <canvas id="bq3DistributionChart"></canvas>
@@ -164,9 +142,6 @@
     </div>
 </div>
 
-{{ filter_labels|json_script:"bq3-filter-labels" }}
-{{ filter_rates|json_script:"bq3-filter-rates" }}
-{{ filter_avg_times|json_script:"bq3-filter-avg-times" }}
 {{ distribution_labels|json_script:"bq3-distribution-labels" }}
 {{ distribution_values|json_script:"bq3-distribution-values" }}
 {{ interaction_type_labels|json_script:"bq3-interaction-type-labels" }}
@@ -188,40 +163,19 @@
         });
     }
 
-    const filterLabelsEl = document.getElementById('bq3-filter-labels');
-    const filterRatesEl = document.getElementById('bq3-filter-rates');
-    const filterAvgTimesEl = document.getElementById('bq3-filter-avg-times');
     const distributionLabelsEl = document.getElementById('bq3-distribution-labels');
     const distributionValuesEl = document.getElementById('bq3-distribution-values');
     const interactionTypeLabelsEl = document.getElementById('bq3-interaction-type-labels');
     const interactionTypeValuesEl = document.getElementById('bq3-interaction-type-values');
 
     if (
-        filterLabelsEl && filterRatesEl && filterAvgTimesEl &&
         distributionLabelsEl && distributionValuesEl &&
         interactionTypeLabelsEl && interactionTypeValuesEl
     ) {
-        const filterLabels = JSON.parse(filterLabelsEl.textContent);
-        const filterRates = JSON.parse(filterRatesEl.textContent);
-        const filterAvgTimes = JSON.parse(filterAvgTimesEl.textContent);
         const distributionLabels = JSON.parse(distributionLabelsEl.textContent);
         const distributionValues = JSON.parse(distributionValuesEl.textContent);
         const interactionTypeLabels = JSON.parse(interactionTypeLabelsEl.textContent);
         const interactionTypeValues = JSON.parse(interactionTypeValuesEl.textContent);
-
-        createBarChart(
-            'bq3RateByFilterChart',
-            filterLabels,
-            filterRates,
-            'Interaction Rate (%)'
-        );
-
-        createBarChart(
-            'bq3AvgTimeByFilterChart',
-            filterLabels,
-            filterAvgTimes,
-            'Avg Time (s)'
-        );
 
         createBarChart(
             'bq3DistributionChart',

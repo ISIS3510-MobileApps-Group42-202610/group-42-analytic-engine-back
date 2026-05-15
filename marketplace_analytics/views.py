@@ -1290,8 +1290,6 @@ def bq3_dashboard(request):
         until=until,
         period_label=label,
     )
-
-    by_filter_type = report.get('by_filter_type', {})
     distribution = report.get('distribution_buckets', {})
     by_interaction_type = report.get('by_interaction_type', {})
 
@@ -1307,16 +1305,6 @@ def bq3_dashboard(request):
         'avg_seconds_to_first_interaction': round(report.get('avg_seconds_to_first_interaction') or 0, 1),
         'median_seconds_to_first_interaction': round(report.get('median_seconds_to_first_interaction') or 0, 1),
         'p90_seconds_to_first_interaction': round(report.get('p90_seconds_to_first_interaction') or 0, 1),
-
-        'filter_labels': list(by_filter_type.keys()),
-        'filter_rates': [
-            round((item.get('interaction_rate') or 0) * 100, 1)
-            for item in by_filter_type.values()
-        ],
-        'filter_avg_times': [
-            round(item.get('avg_seconds_to_interaction') or 0, 1)
-            for item in by_filter_type.values()
-        ],
 
         'distribution_labels': list(distribution.keys()),
         'distribution_values': list(distribution.values()),
