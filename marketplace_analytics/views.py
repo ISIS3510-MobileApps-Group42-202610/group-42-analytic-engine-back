@@ -1290,8 +1290,34 @@ def bq3_dashboard(request):
         until=until,
         period_label=label,
     )
+
     distribution = report.get('distribution_buckets', {})
     by_interaction_type = report.get('by_interaction_type', {})
+    by_filter_type = report.get('by_filter_type', {})
+
+    filter_label_map = {
+        'none': 'Keyword only',
+        'category': 'Category filter',
+        'course': 'Course filter',
+        'both': 'Course + category',
+    }
+
+    ordered_filter_keys = ['none', 'category', 'course', 'both']
+    filter_breakdown = []
+
+    for filter_key in ordered_filter_keys:
+        stats = by_filter_type.get(filter_key)
+        if not stats:
+            continue
+
+        filter_breakdown.append({
+            'key': filter_key,
+            'name': filter_label_map.get(filter_key, filter_key.title()),
+            'sessions_started': stats.get('sessions_started', 0),
+            'sessions_with_interaction': stats.get('sessions_with_interaction', 0),
+            'interaction_rate': round((stats.get('interaction_rate') or 0) * 100, 1),
+            'avg_time': round(stats.get('avg_seconds_to_interaction') or 0, 1),
+        })
 
     context = {
         'selected_period': period,
@@ -1311,6 +1337,8 @@ def bq3_dashboard(request):
 
         'interaction_type_labels': list(by_interaction_type.keys()),
         'interaction_type_values': list(by_interaction_type.values()),
+
+        'filter_breakdown': filter_breakdown,
 
         'sample_completed_sessions': report.get('sample_completed_sessions', []),
     }

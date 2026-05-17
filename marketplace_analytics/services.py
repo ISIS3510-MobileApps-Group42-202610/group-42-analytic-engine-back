@@ -376,6 +376,24 @@ def calculate_bq3_search_to_interaction_metric(
     until: datetime | None = None,
     period_label: str = 'all_time',
 ):
+    """
+    BQ3: Measures how often and how quickly users find listings after
+    search/filter actions.
+
+    Core definition:
+    - Start event: first search_started or filter_applied event in a session.
+    - Meaningful interaction: first listing_opened, message_sent, or
+      reservation_created event after the start event in the same session.
+    - Interaction rate: sessions_with_interaction / sessions_started.
+    - Time to interaction: seconds between the first start event and first
+      meaningful interaction.
+
+    The dashboard also compares filter strategies:
+    - none: keyword search only
+    - category: category filter only
+    - course: course filter only
+    - both: category + course filters
+    """
     events = SearchDiscoveryEvent.objects.all()
 
     if since is not None:
@@ -474,11 +492,27 @@ def calculate_bq3_search_to_interaction_metric(
             for s in completed_sessions
             if (s['selected_filter_type'] or SearchDiscoveryEvent.FilterType.NONE) == filter_key
         ]
+
         data['avg_seconds_to_interaction'] = _safe_avg(filter_elapsed)
         data['median_seconds_to_interaction'] = _safe_median(filter_elapsed)
+
         sessions_started = int(data['sessions_started'] or 0)
         sessions_with_interaction = int(data['sessions_with_interaction'] or 0)
-        data['interaction_rate'] = _safe_ratio(sessions_with_interaction, sessions_started)
+        data['interaction_rate'] = _safe_ratio(
+            sessions_with_interaction,
+            sessions_started,
+        )
+
+    by_filter_type = {
+        filter_key: {
+            'sessions_started': int(data['sessions_started'] or 0),
+            'sessions_with_interaction': int(data['sessions_with_interaction'] or 0),
+            'interaction_rate': data['interaction_rate'],
+            'avg_seconds_to_interaction': data['avg_seconds_to_interaction'],
+            'median_seconds_to_interaction': data['median_seconds_to_interaction'],
+        }
+        for filter_key, data in breakdown.items()
+    }
 
     return {
         'period': {
@@ -502,7 +536,7 @@ def calculate_bq3_search_to_interaction_metric(
         'median_seconds_to_first_interaction': _safe_median(elapsed_seconds),
         'p90_seconds_to_first_interaction': _percentile(elapsed_seconds, 90),
         'distribution_buckets': _build_distribution_buckets(elapsed_seconds),
-        'by_filter_type': breakdown,
+        'by_filter_type': by_filter_type,
         'by_interaction_type': dict(interaction_breakdown),
         'sample_completed_sessions': completed_sessions[:20],
     }
@@ -523,73 +557,150 @@ def calculate_bq6_seller_response_time_metric(
     if until is not None:
         base_qs = base_qs.filter(timestamp__lte=until)
 
-    response_events = base_qs.filter(
-        event_name=MessagingResponseEvent.EventName.SELLER_AVG_RESPONSE_TIME,
-        avg_response_minutes__isnull=False,
-        seller_id__isnull=False,
-    )
+    events = list(base_qs.order_by('timestamp', 'id'))
 
-    overall_stats = response_events.aggregate(
-        avg_response=Avg('avg_response_minutes'),
-        min_response=Min('avg_response_minutes'),
-        max_response=Max('avg_response_minutes'),
-        total_measurements=Count('id'),
-    )
+    conversations = {}
 
-    seller_breakdown_qs = (
-        response_events
-        .values('seller_id')
-        .annotate(
-            avg_response_minutes=Avg('avg_response_minutes'),
-            measurements=Count('id'),
+    for event in events:
+        props = event.properties or {}
+
+        listing_id = props.get('listing_id') or props.get('product_id') or ''
+        buyer_user_id = props.get('buyer_user_id') or props.get('buyer_id') or ''
+        seller_id = event.seller_id or props.get('seller_id') or ''
+
+        conversation_key = (
+            props.get('conversation_key')
+            or f'{listing_id}_{buyer_user_id}_{seller_id}'
         )
-        .order_by('avg_response_minutes', '-measurements')
-    )
 
-    top_fastest_sellers = list(seller_breakdown_qs[:10])
-    slowest_sellers = list(seller_breakdown_qs.order_by('-avg_response_minutes', '-measurements')[:10])
+        if not conversation_key:
+            continue
 
-    daily_trend = list(
-        response_events
-        .annotate(date=TruncDate('timestamp'))
-        .values('date')
-        .annotate(
-            avg_response_minutes=Avg('avg_response_minutes'),
-            measurements=Count('id'),
+        conversation = conversations.setdefault(
+            conversation_key,
+            {
+                'conversation_key': conversation_key,
+                'listing_id': listing_id,
+                'buyer_user_id': buyer_user_id,
+                'seller_id': seller_id,
+                'buyer_first_message_at': None,
+                'seller_first_reply_at': None,
+            },
         )
-        .order_by('date')
+
+        sent_by = str(props.get('sent_by') or '').lower()
+
+        is_buyer_initial_contact = (
+            event.event_name == MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT
+            and sent_by == 'buyer'
+        )
+
+        is_seller_reply = (
+            event.event_name == MessagingResponseEvent.EventName.MESSAGE_SENT
+            and sent_by == 'seller'
+        )
+
+        if is_buyer_initial_contact:
+            if (
+                conversation['buyer_first_message_at'] is None
+                or event.timestamp < conversation['buyer_first_message_at']
+            ):
+                conversation['buyer_first_message_at'] = event.timestamp
+
+        if is_seller_reply:
+            buyer_first_message_at = conversation['buyer_first_message_at']
+
+            if (
+                buyer_first_message_at is not None
+                and event.timestamp >= buyer_first_message_at
+                and conversation['seller_first_reply_at'] is None
+            ):
+                conversation['seller_first_reply_at'] = event.timestamp
+
+    completed_conversations = []
+    response_minutes = []
+
+    for conversation in conversations.values():
+        buyer_first_message_at = conversation['buyer_first_message_at']
+        seller_first_reply_at = conversation['seller_first_reply_at']
+
+        if buyer_first_message_at is None:
+            continue
+
+        if seller_first_reply_at is not None:
+            minutes = (
+                seller_first_reply_at - buyer_first_message_at
+            ).total_seconds() / 60
+
+            completed_conversations.append({
+                **conversation,
+                'response_minutes': minutes,
+            })
+
+            response_minutes.append(minutes)
+
+    total_buyer_contacts = len([
+        c for c in conversations.values()
+        if c['buyer_first_message_at'] is not None
+    ])
+
+    total_seller_replies = len(completed_conversations)
+
+    seller_stats = {}
+
+    for item in completed_conversations:
+        seller_id = item.get('seller_id') or 'unknown'
+
+        if seller_id not in seller_stats:
+            seller_stats[seller_id] = {
+                'seller_id': seller_id,
+                'response_times': [],
+            }
+
+        seller_stats[seller_id]['response_times'].append(
+            item['response_minutes']
+        )
+
+    seller_breakdown = []
+
+    for seller_id, data in seller_stats.items():
+        values = data['response_times']
+
+        seller_breakdown.append({
+            'seller_id': seller_id,
+            'avg_response_minutes': _safe_avg(values),
+            'median_response_minutes': _safe_median(values),
+            'measurements': len(values),
+        })
+
+    seller_breakdown = sorted(
+        seller_breakdown,
+        key=lambda item: (
+            item['avg_response_minutes'] if item['avg_response_minutes'] is not None else 999999,
+            -item['measurements'],
+        ),
     )
 
-    screen_opened_count = base_qs.filter(
-        event_name=MessagingResponseEvent.EventName.MESSAGES_SCREEN_OPENED
-    ).count()
+    daily_trend_map = defaultdict(list)
 
-    message_sent_count = base_qs.filter(
-        event_name__in=[
-            MessagingResponseEvent.EventName.MESSAGE_SENT,
-            MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT,
-        ]
-    ).count()
+    for item in completed_conversations:
+        reply_date = item['seller_first_reply_at'].date()
+        daily_trend_map[reply_date].append(item['response_minutes'])
 
-    avg_unread_conversations = (
-        base_qs.filter(
-            event_name=MessagingResponseEvent.EventName.MESSAGES_SCREEN_OPENED,
-            unread_conversations__isnull=False,
-        ).aggregate(avg=Avg('unread_conversations'))['avg']
-        or 0
-    )
-
-    values = [
-        float(value)
-        for value in response_events.values_list('avg_response_minutes', flat=True)
-        if value is not None
+    daily_trend = [
+        {
+            'date': day,
+            'avg_response_minutes': _safe_avg(values),
+            'measurements': len(values),
+        }
+        for day, values in sorted(daily_trend_map.items())
     ]
 
     distribution_buckets = {
-        'under_5_min': response_events.filter(avg_response_minutes__lt=5).count(),
-        'from_5_to_30_min': response_events.filter(avg_response_minutes__gte=5, avg_response_minutes__lt=30).count(),
-        'from_30_to_120_min': response_events.filter(avg_response_minutes__gte=30, avg_response_minutes__lt=120).count(),
-        'over_120_min': response_events.filter(avg_response_minutes__gte=120).count(),
+        'under_5_min': len([v for v in response_minutes if v < 5]),
+        'from_5_to_30_min': len([v for v in response_minutes if 5 <= v < 30]),
+        'from_30_to_120_min': len([v for v in response_minutes if 30 <= v < 120]),
+        'over_120_min': len([v for v in response_minutes if v >= 120]),
     }
 
     return {
@@ -599,23 +710,31 @@ def calculate_bq6_seller_response_time_metric(
             'until': until,
         },
         'metric_definition': (
-            'Average seller response time, in minutes, after a buyer initiates contact.'
+            'Average seller response time after a buyer sends the first message '
+            'for a listing. Measured as seller first reply timestamp minus buyer '
+            'first contact timestamp in the same conversation.'
         ),
-        'total_measurements': overall_stats['total_measurements'] or 0,
-        'avg_response_minutes': overall_stats['avg_response'],
-        'median_response_minutes': _safe_median(values),
-        'p90_response_minutes': _percentile(values, 90),
-        'min_response_minutes': overall_stats['min_response'],
-        'max_response_minutes': overall_stats['max_response'],
-        'messages_screen_opened': screen_opened_count,
-        'messages_sent': message_sent_count,
-        'avg_unread_conversations': avg_unread_conversations,
+        'total_buyer_contacts': total_buyer_contacts,
+        'total_seller_replies': total_seller_replies,
+        'response_rate': _safe_ratio(total_seller_replies, total_buyer_contacts),
+        'total_measurements': total_seller_replies,
+        'avg_response_minutes': _safe_avg(response_minutes),
+        'median_response_minutes': _safe_median(response_minutes),
+        'p90_response_minutes': _percentile(response_minutes, 90),
+        'min_response_minutes': min(response_minutes) if response_minutes else None,
+        'max_response_minutes': max(response_minutes) if response_minutes else None,
         'distribution_buckets': distribution_buckets,
-        'top_fastest_sellers': top_fastest_sellers,
-        'slowest_sellers': slowest_sellers,
+        'top_fastest_sellers': seller_breakdown[:10],
+        'slowest_sellers': sorted(
+            seller_breakdown,
+            key=lambda item: (
+                -(item['avg_response_minutes'] or 0),
+                -item['measurements'],
+            ),
+        )[:10],
         'daily_trend': daily_trend,
+        'sample_completed_conversations': completed_conversations[:20],
     }
-
 
 def _resolve_filter_type(event: SearchDiscoveryEvent) -> str:
     if event.selected_filter_type and event.selected_filter_type != SearchDiscoveryEvent.FilterType.NONE:

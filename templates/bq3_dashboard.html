@@ -48,27 +48,29 @@
 
 <div class="cards">
     <div class="card highlight-card">
-        <div class="label">Search Sessions Started</div>
-        <div class="value">{{ search_sessions_started }}</div>
-        <div class="subline">Sessions with search or filter activity</div>
-    </div>
-
-    <div class="card">
-        <div class="label">Sessions With Interaction</div>
-        <div class="value">{{ search_sessions_with_meaningful_interaction }}</div>
-        <div class="subline">Reached listing open, message, or reservation</div>
-    </div>
-
-    <div class="card">
         <div class="label">Interaction Rate</div>
         <div class="value">{{ interaction_rate }} <span class="unit">%</span></div>
-        <div class="subline">Completed search-to-interaction journeys</div>
+        <div class="subline">
+            {{ search_sessions_with_meaningful_interaction }} of {{ search_sessions_started }} search/filter sessions reached a meaningful interaction
+        </div>
     </div>
 
     <div class="card">
         <div class="label">Avg Time to First Interaction</div>
         <div class="value">{{ avg_seconds_to_first_interaction }} <span class="unit">s</span></div>
-        <div class="subline">Average elapsed time per completed session</div>
+        <div class="subline">Average elapsed time after the first search/filter action</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Median Time</div>
+        <div class="value">{{ median_seconds_to_first_interaction }} <span class="unit">s</span></div>
+        <div class="subline">Typical elapsed time for completed sessions</div>
+    </div>
+
+    <div class="card">
+        <div class="label">P90 Time</div>
+        <div class="value">{{ p90_seconds_to_first_interaction }} <span class="unit">s</span></div>
+        <div class="subline">Slowest 10% take longer than this</div>
     </div>
 </div>
 
@@ -78,11 +80,21 @@
     <ul>
         <li>The dashboard route is working correctly.</li>
         <li>There are no search/filter interaction events stored yet for the selected period.</li>
-        <li>You need to send events to <strong>/api/bq3/events/</strong> from the iOS app so charts can populate.</li>
+        <li>You need to send events to <strong>/api/bq3/events/</strong> from the mobile app so charts can populate.</li>
     </ul>
 </div>
 {% else %}
 <div class="charts">
+    <div class="chart-box">
+        <h3>Interaction Rate by Filter Strategy</h3>
+        <canvas id="bq3FilterStrategyChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Average Time by Filter Strategy</h3>
+        <canvas id="bq3FilterTimeChart"></canvas>
+    </div>
+
     <div class="chart-box">
         <h3>Time Distribution to First Interaction</h3>
         <canvas id="bq3DistributionChart"></canvas>
@@ -98,6 +110,7 @@
     <h3>Methodological Definitions</h3>
     <ul>
         <li>Session started: first <code>search_started</code> or <code>filter_applied</code> event in a session.</li>
+        <li>Filter strategies: keyword only, category filter, course filter, or course + category filters.</li>
         <li>Meaningful interaction: <code>listing_opened</code>, <code>message_sent</code>, or <code>reservation_created</code>.</li>
         <li>Interaction rate: percentage of started sessions that reached at least one meaningful interaction.</li>
         <li>Elapsed time: difference between first search/filter event and first meaningful interaction in the same session.</li>
@@ -142,6 +155,7 @@
     </div>
 </div>
 
+{{ filter_breakdown|json_script:"bq3-filter-breakdown" }}
 {{ distribution_labels|json_script:"bq3-distribution-labels" }}
 {{ distribution_values|json_script:"bq3-distribution-values" }}
 {{ interaction_type_labels|json_script:"bq3-interaction-type-labels" }}
@@ -163,19 +177,36 @@
         });
     }
 
+    const filterBreakdownEl = document.getElementById('bq3-filter-breakdown');
     const distributionLabelsEl = document.getElementById('bq3-distribution-labels');
     const distributionValuesEl = document.getElementById('bq3-distribution-values');
     const interactionTypeLabelsEl = document.getElementById('bq3-interaction-type-labels');
     const interactionTypeValuesEl = document.getElementById('bq3-interaction-type-values');
 
     if (
+        filterBreakdownEl &&
         distributionLabelsEl && distributionValuesEl &&
         interactionTypeLabelsEl && interactionTypeValuesEl
     ) {
+        const filterBreakdown = JSON.parse(filterBreakdownEl.textContent);
         const distributionLabels = JSON.parse(distributionLabelsEl.textContent);
         const distributionValues = JSON.parse(distributionValuesEl.textContent);
         const interactionTypeLabels = JSON.parse(interactionTypeLabelsEl.textContent);
         const interactionTypeValues = JSON.parse(interactionTypeValuesEl.textContent);
+
+        createBarChart(
+            'bq3FilterStrategyChart',
+            filterBreakdown.map(item => item.name),
+            filterBreakdown.map(item => item.interaction_rate),
+            'Interaction Rate (%)'
+        );
+
+        createBarChart(
+            'bq3FilterTimeChart',
+            filterBreakdown.map(item => item.name),
+            filterBreakdown.map(item => item.avg_time),
+            'Average Time (s)'
+        );
 
         createBarChart(
             'bq3DistributionChart',
