@@ -563,15 +563,15 @@ def calculate_bq6_seller_response_time_metric(
 
     for event in events:
         props = event.properties or {}
-
         listing_id = props.get('listing_id') or props.get('product_id') or ''
         buyer_user_id = props.get('buyer_user_id') or props.get('buyer_id') or ''
         seller_id = event.seller_id or props.get('seller_id') or ''
 
         conversation_key = (
-            props.get('conversation_key')
-            or f'{listing_id}_{buyer_user_id}_{seller_id}'
+        props.get('conversation_key')
+        or f'{buyer_user_id}_{seller_id}'
         )
+
 
         if not conversation_key:
             continue
@@ -591,13 +591,16 @@ def calculate_bq6_seller_response_time_metric(
         sent_by = str(props.get('sent_by') or '').lower()
 
         is_buyer_initial_contact = (
-            event.event_name == MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT
-            and sent_by == 'buyer'
+        event.event_name in [
+            MessagingResponseEvent.EventName.FIRST_MESSAGE_SENT,
+            MessagingResponseEvent.EventName.MESSAGE_SENT,
+        ]
+        and sent_by == 'buyer'
         )
 
         is_seller_reply = (
-            event.event_name == MessagingResponseEvent.EventName.MESSAGE_SENT
-            and sent_by == 'seller'
+        event.event_name == MessagingResponseEvent.EventName.MESSAGE_SENT
+        and sent_by == 'seller'
         )
 
         if is_buyer_initial_contact:

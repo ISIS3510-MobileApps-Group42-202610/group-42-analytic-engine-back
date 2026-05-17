@@ -169,7 +169,7 @@
     <ul>
         <li>
             Buyer contact:
-            first <code>first_message_sent</code> event in a conversation.
+            first buyer <code>message_sent</code> or <code>first_message_sent</code> event in a conversation.
         </li>
 
         <li>
@@ -281,17 +281,20 @@
             JSON.parse(trendValuesEl.textContent);
 
         createBarChart(
-            'bq6DistributionChart',
-            distributionLabels,
-            distributionValues,
-            'Completed Conversations'
+        'bq6DistributionChart',
+        distributionLabels,
+        distributionValues,
+        'Completed Conversations',
+        'Conversations'
         );
 
         createLineChart(
-            'bq6TrendChart',
-            trendLabels,
-            trendValues,
-            'Average Response Time (min)'
+        'bq6TrendChart',
+        trendLabels,
+        trendValues,
+        'Average Response Time (min)',
+        '#0891b2',
+        'Minutes'
         );
     }
 </script>

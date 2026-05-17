@@ -1368,30 +1368,28 @@ def bq6_dashboard(request):
     }
 
     distribution = report.get('distribution_buckets', {})
-    top_fastest = report.get('top_fastest_sellers', [])
-    slowest = report.get('slowest_sellers', [])
     daily_trend = report.get('daily_trend', [])
+    sample_completed = report.get('sample_completed_conversations', [])
+
+    response_rate = round((report.get('response_rate') or 0) * 100, 1)
 
     context = {
         'selected_period': resolved_period,
         'period_display': period_label_map.get(resolved_period, resolved_period),
         'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
         'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+
+        'total_buyer_contacts': report.get('total_buyer_contacts', 0),
+        'total_seller_replies': report.get('total_seller_replies', 0),
         'total_measurements': report.get('total_measurements', 0),
+
         'avg_response_minutes': round(report.get('avg_response_minutes') or 0, 1),
         'median_response_minutes': round(report.get('median_response_minutes') or 0, 1),
         'p90_response_minutes': round(report.get('p90_response_minutes') or 0, 1),
-        'min_response_minutes': round(report.get('min_response_minutes') or 0, 1),
-        'max_response_minutes': round(report.get('max_response_minutes') or 0, 1),
-        'messages_screen_opened': report.get('messages_screen_opened', 0),
-        'messages_sent': report.get('messages_sent', 0),
-        'avg_unread_conversations': round(report.get('avg_unread_conversations') or 0, 1),
-        'fastest_seller_labels': [f"Seller {item['seller_id']}" for item in top_fastest],
-        'fastest_seller_values': [round(item['avg_response_minutes'] or 0, 1) for item in top_fastest],
-        'slowest_seller_labels': [f"Seller {item['seller_id']}" for item in slowest],
-        'slowest_seller_values': [round(item['avg_response_minutes'] or 0, 1) for item in slowest],
-        'daily_labels': [item['date'].strftime('%b %d') for item in daily_trend],
-        'daily_values': [round(item['avg_response_minutes'] or 0, 1) for item in daily_trend],
+
+        'response_rate': response_rate,
+        'response_rate_percent': response_rate,
+
         'distribution_labels': ['< 5 min', '5-30 min', '30-120 min', '> 120 min'],
         'distribution_values': [
             distribution.get('under_5_min', 0),
@@ -1399,7 +1397,14 @@ def bq6_dashboard(request):
             distribution.get('from_30_to_120_min', 0),
             distribution.get('over_120_min', 0),
         ],
-        'top_fastest_rows': top_fastest,
+
+        'trend_labels': [item['date'].strftime('%b %d') for item in daily_trend],
+        'trend_values': [round(item['avg_response_minutes'] or 0, 1) for item in daily_trend],
+
+        'daily_labels': [item['date'].strftime('%b %d') for item in daily_trend],
+        'daily_values': [round(item['avg_response_minutes'] or 0, 1) for item in daily_trend],
+
+        'sample_completed_conversations': sample_completed,
     }
 
     return render(request, 'bq6_dashboard.html', context)
