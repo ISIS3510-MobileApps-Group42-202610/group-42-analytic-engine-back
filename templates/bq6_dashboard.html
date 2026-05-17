@@ -1,238 +1,298 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+{% extends "base.html" %}
 
-    <title>BQ6 - Seller Response Time</title>
+{% block title %}BQ6: Seller Response Time - Analytics Dashboard{% endblock %}
+{% block nav_bq6 %}active{% endblock %}
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ Type 2)</h3>
 
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f5f7fb;
-            margin: 0;
-            padding: 24px;
-            color: #1f2937;
-        }
-
-        h1 {
-            margin-bottom: 6px;
-        }
-
-        .subtitle {
-            color: #6b7280;
-            margin-bottom: 24px;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-
-        .card {
-            background: white;
-            border-radius: 16px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-
-        .metric-label {
-            color: #6b7280;
-            font-size: 14px;
-        }
-
-        .metric-value {
-            font-size: 34px;
-            font-weight: bold;
-            margin-top: 8px;
-        }
-
-        .chart-card {
-            background: white;
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 24px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-
-        canvas {
-            margin-top: 20px;
-            max-height: 420px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 14px;
-        }
-
-        th, td {
-            padding: 12px;
-            border-bottom: 1px solid #e5e7eb;
-            text-align: left;
-        }
-
-        th {
-            background: #f9fafb;
-        }
-
-        .small {
-            color: #6b7280;
-            font-size: 13px;
-        }
-    </style>
-</head>
-<body>
-
-<h1>BQ6 - Seller Response Time</h1>
-
-<p class="subtitle">
-    Average seller response time after a buyer initiates contact.
-</p>
-
-<div class="grid">
-
-    <div class="card">
-        <div class="metric-label">Average Response Time</div>
-        <div class="metric-value">
-            {{ avg_response_minutes|floatformat:1 }} min
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="metric-label">Median Response Time</div>
-        <div class="metric-value">
-            {{ median_response_minutes|floatformat:1 }} min
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="metric-label">Buyer Contacts</div>
-        <div class="metric-value">
-            {{ total_buyer_contacts }}
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="metric-label">Seller Replies</div>
-        <div class="metric-value">
-            {{ total_seller_replies }}
-        </div>
-    </div>
-
-</div>
-
-<div class="chart-card">
-    <h2>Response Time Distribution</h2>
-
-    <p class="small">
-        Shows how fast sellers usually respond after the buyer sends the first message.
+    <p>
+        What is the average seller response time after a buyer initiates contact for a listing?
     </p>
 
-    <canvas id="distributionChart"></canvas>
-</div>
-
-<div class="chart-card">
-    <h2>Daily Average Response Time</h2>
-
-    <p class="small">
-        Trend of seller response time over time.
+    <p style="margin-top: 8px;">
+        Measured as the elapsed time between the buyer's first message and the seller's first reply
+        within the same conversation.
     </p>
-
-    <canvas id="trendChart"></canvas>
 </div>
 
-<div class="chart-card">
-    <h2>Fastest Sellers</h2>
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq6FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
 
-    <p class="small">
-        Sellers with the lowest average response time.
-    </p>
+            <select name="period" id="period">
+                <option value="all_time"
+                    {% if selected_period == 'all_time' %}selected{% endif %}>
+                    All Time
+                </option>
 
-    <table>
-        <thead>
-            <tr>
-                <th>Seller ID</th>
-                <th>Avg Response</th>
-                <th>Measurements</th>
-            </tr>
-        </thead>
+                <option value="last_30_days"
+                    {% if selected_period == 'last_30_days' %}selected{% endif %}>
+                    Last 30 Days
+                </option>
 
-        <tbody>
-            {% for seller in top_fastest_sellers %}
-            <tr>
-                <td>{{ seller.seller_id }}</td>
-                <td>{{ seller.avg_response_minutes|floatformat:1 }} min</td>
-                <td>{{ seller.measurements }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                <option value="semester_to_date"
+                    {% if selected_period == 'semester_to_date' %}selected{% endif %}>
+                    Semester to Date
+                </option>
+
+                <option value="custom"
+                    {% if selected_period == 'custom' %}selected{% endif %}>
+                    Custom Range
+                </option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}"
+             id="customRangeFields">
+
+            <label for="start">Start</label>
+
+            <input type="datetime-local"
+                   name="start"
+                   id="start"
+                   value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}"
+             id="customRangeFieldsEnd">
+
+            <label for="end">End</label>
+
+            <input type="datetime-local"
+                   name="end"
+                   id="end"
+                   value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">
+        Current: {{ period_display }}
+    </div>
 </div>
 
-<script>
-    const distributionCtx =
-        document.getElementById('distributionChart');
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Average Seller Response Time</div>
 
-    new Chart(distributionCtx, {
-        type: 'bar',
-        data: {
-            labels: [
-                '< 5 min',
-                '5 - 30 min',
-                '30 - 120 min',
-                '> 120 min'
-            ],
-            datasets: [{
-                label: 'Conversations',
-                data: [
-                    {{ distribution_buckets.under_5_min }},
-                    {{ distribution_buckets.from_5_to_30_min }},
-                    {{ distribution_buckets.from_30_to_120_min }},
-                    {{ distribution_buckets.over_120_min }}
-                ]
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
-        }
-    });
+        <div class="value">
+            {{ avg_response_minutes|floatformat:1 }}
+            <span class="unit">min</span>
+        </div>
 
-    const trendCtx =
-        document.getElementById('trendChart');
+        <div class="subline">
+            Seller first reply after buyer first contact
+        </div>
+    </div>
 
-    new Chart(trendCtx, {
-        type: 'line',
-        data: {
-            labels: [
-                {% for item in daily_trend %}
-                    '{{ item.date }}',
+    <div class="card">
+        <div class="label">Median Response Time</div>
+
+        <div class="value">
+            {{ median_response_minutes|floatformat:1 }}
+            <span class="unit">min</span>
+        </div>
+
+        <div class="subline">
+            Typical seller response time
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Response Rate</div>
+
+        <div class="value">
+            {{ response_rate|floatformat:2 }}
+            <span class="unit">%</span>
+        </div>
+
+        <div class="subline">
+            Seller replies after buyer contact
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Completed Conversations</div>
+
+        <div class="value">
+            {{ total_measurements }}
+        </div>
+
+        <div class="subline">
+            Conversations with buyer contact and seller reply
+        </div>
+    </div>
+</div>
+
+{% if total_measurements == 0 %}
+<div class="methodology-box">
+    <h3>No BQ6 data available yet</h3>
+
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+
+        <li>
+            No seller response measurements have been recorded yet.
+        </li>
+
+        <li>
+            Send buyer and seller chat events from the mobile app to populate this dashboard.
+        </li>
+    </ul>
+</div>
+
+{% else %}
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Seller Response Time Distribution</h3>
+
+        <canvas id="bq6DistributionChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Average Seller Response Time Over Time</h3>
+
+        <canvas id="bq6TrendChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+
+    <ul>
+        <li>
+            Buyer contact:
+            first <code>first_message_sent</code> event in a conversation.
+        </li>
+
+        <li>
+            Seller response:
+            first seller <code>message_sent</code> after buyer contact.
+        </li>
+
+        <li>
+            Response time:
+            seller first reply timestamp minus buyer first message timestamp.
+        </li>
+
+        <li>
+            Only completed conversations with both buyer and seller events are measured.
+        </li>
+    </ul>
+</div>
+
+<div class="chart-box full">
+    <h3>Sample Completed Conversations</h3>
+
+    <div style="overflow-x: auto;">
+        <table class="analytics-table">
+            <thead>
+                <tr>
+                    <th>Conversation</th>
+                    <th>Listing</th>
+                    <th>Buyer</th>
+                    <th>Seller</th>
+                    <th>Response Time (min)</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for item in sample_completed_conversations %}
+                <tr>
+                    <td>{{ item.conversation_key }}</td>
+                    <td>{{ item.listing_id }}</td>
+                    <td>{{ item.buyer_user_id }}</td>
+                    <td>{{ item.seller_id }}</td>
+                    <td>{{ item.response_minutes|floatformat:1 }}</td>
+                </tr>
+
+                {% empty %}
+                <tr>
+                    <td colspan="5">
+                        No completed conversations available.
+                    </td>
+                </tr>
                 {% endfor %}
-            ],
-            datasets: [{
-                label: 'Avg Response Time (min)',
-                data: [
-                    {% for item in daily_trend %}
-                        {{ item.avg_response_minutes|default:0 }},
-                    {% endfor %}
-                ],
-                tension: 0.3
-            }]
-        },
-        options: {
-            responsive: true
-        }
-    });
-</script>
+            </tbody>
+        </table>
+    </div>
+</div>
 
-</body>
-</html>
+{{ distribution_labels|json_script:"bq6-distribution-labels" }}
+{{ distribution_values|json_script:"bq6-distribution-values" }}
+{{ trend_labels|json_script:"bq6-trend-labels" }}
+{{ trend_values|json_script:"bq6-trend-values" }}
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodSelect = document.getElementById('period');
+
+    const customStart = document.getElementById('customRangeFields');
+
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    if (periodSelect) {
+        periodSelect.addEventListener('change', function () {
+            const show = this.value === 'custom';
+
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    const distributionLabelsEl =
+        document.getElementById('bq6-distribution-labels');
+
+    const distributionValuesEl =
+        document.getElementById('bq6-distribution-values');
+
+    const trendLabelsEl =
+        document.getElementById('bq6-trend-labels');
+
+    const trendValuesEl =
+        document.getElementById('bq6-trend-values');
+
+    if (
+        distributionLabelsEl &&
+        distributionValuesEl &&
+        trendLabelsEl &&
+        trendValuesEl
+    ) {
+        const distributionLabels =
+            JSON.parse(distributionLabelsEl.textContent);
+
+        const distributionValues =
+            JSON.parse(distributionValuesEl.textContent);
+
+        const trendLabels =
+            JSON.parse(trendLabelsEl.textContent);
+
+        const trendValues =
+            JSON.parse(trendValuesEl.textContent);
+
+        createBarChart(
+            'bq6DistributionChart',
+            distributionLabels,
+            distributionValues,
+            'Completed Conversations'
+        );
+
+        createLineChart(
+            'bq6TrendChart',
+            trendLabels,
+            trendValues,
+            'Average Response Time (min)'
+        );
+    }
+</script>
+{% endblock %}
