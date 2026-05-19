@@ -336,7 +336,7 @@ def bq2_dashboard(request):
 def bq7_dashboard(request):
     """
     Dashboard for BQ7:
-    How does enabling price suggestions influence seller behavior in terms of
+    How does using price suggestions influence seller behavior in terms of
     time-to-sale and transaction completion rate?
     """
     from marketplace_analytics.models import AnalyticsEvent
@@ -362,40 +362,28 @@ def bq7_dashboard(request):
     )
 
     created_by_listing = {}
+
     for event in created_events.order_by('occurred_at', 'id'):
         if event.listing_id not in created_by_listing:
             metadata = event.metadata or {}
+
             created_by_listing[event.listing_id] = {
                 'listing_id': event.listing_id,
                 'created_at': event.occurred_at,
-                'price_suggestion_enabled': bool(
-                    metadata.get('price_suggestion_enabled', False)
-                ),
                 'price_suggestion_accepted': bool(
                     metadata.get('price_suggestion_accepted', False)
                 ),
             }
 
     transactions_by_listing = {}
+
     for event in transaction_events.order_by('occurred_at', 'id'):
         if event.listing_id not in transactions_by_listing:
             transactions_by_listing[event.listing_id] = event.occurred_at
 
     groups = {
-        'enabled': {
-            'label': 'Suggestion Enabled',
-            'listings': 0,
-            'completed': 0,
-            'time_to_sale_hours': [],
-        },
-        'disabled': {
-            'label': 'Suggestion Disabled',
-            'listings': 0,
-            'completed': 0,
-            'time_to_sale_hours': [],
-        },
-        'accepted': {
-            'label': 'Suggestion Accepted',
+        'used': {
+            'label': 'Suggestion Used',
             'listings': 0,
             'completed': 0,
             'time_to_sale_hours': [],
@@ -409,17 +397,10 @@ def bq7_dashboard(request):
     }
 
     for listing_id, created in created_by_listing.items():
-        enabled = created['price_suggestion_enabled']
         accepted = created['price_suggestion_accepted']
+        group_key = 'used' if accepted else 'ignored'
 
-        main_key = 'enabled' if enabled else 'disabled'
-        groups[main_key]['listings'] += 1
-
-        if enabled:
-            secondary_key = 'accepted' if accepted else 'ignored'
-            groups[secondary_key]['listings'] += 1
-        else:
-            secondary_key = None
+        groups[group_key]['listings'] += 1
 
         completed_at = transactions_by_listing.get(listing_id)
 
@@ -428,12 +409,8 @@ def bq7_dashboard(request):
                 completed_at - created['created_at']
             ).total_seconds() / 3600
 
-            groups[main_key]['completed'] += 1
-            groups[main_key]['time_to_sale_hours'].append(hours)
-
-            if secondary_key is not None:
-                groups[secondary_key]['completed'] += 1
-                groups[secondary_key]['time_to_sale_hours'].append(hours)
+            groups[group_key]['completed'] += 1
+            groups[group_key]['time_to_sale_hours'].append(hours)
 
     def completion_rate(group):
         if group['listings'] == 0:
@@ -446,11 +423,11 @@ def bq7_dashboard(request):
             return 0
         return sum(values) / len(values)
 
-    enabled_rate = completion_rate(groups['enabled'])
-    disabled_rate = completion_rate(groups['disabled'])
+    used_rate = completion_rate(groups['used'])
+    ignored_rate = completion_rate(groups['ignored'])
 
-    enabled_avg_time = avg_time(groups['enabled'])
-    disabled_avg_time = avg_time(groups['disabled'])
+    used_avg_time = avg_time(groups['used'])
+    ignored_avg_time = avg_time(groups['ignored'])
 
     period_label_map = {
         'all_time': 'All Time',
@@ -467,50 +444,42 @@ def bq7_dashboard(request):
 
         'total_listings': len(created_by_listing),
 
-        'enabled_listings': groups['enabled']['listings'],
-        'disabled_listings': groups['disabled']['listings'],
+        'enabled_listings': groups['used']['listings'],
+        'disabled_listings': groups['ignored']['listings'],
 
-        'completion_rate_lift_pct': enabled_rate - disabled_rate,
-        'avg_time_to_sale_difference_hours': enabled_avg_time - disabled_avg_time,
+        'completion_rate_lift_pct': used_rate - ignored_rate,
+        'avg_time_to_sale_difference_hours': used_avg_time - ignored_avg_time,
 
         'completion_labels': [
-            groups['enabled']['label'],
-            groups['disabled']['label'],
+            groups['used']['label'],
+            groups['ignored']['label'],
         ],
         'completion_rates': [
-            round(enabled_rate, 2),
-            round(disabled_rate, 2),
+            round(used_rate, 2),
+            round(ignored_rate, 2),
         ],
 
         'time_to_sale_labels': [
-            groups['enabled']['label'],
-            groups['disabled']['label'],
+            groups['used']['label'],
+            groups['ignored']['label'],
         ],
         'avg_time_to_sale_hours': [
-            round(enabled_avg_time, 2),
-            round(disabled_avg_time, 2),
+            round(used_avg_time, 2),
+            round(ignored_avg_time, 2),
         ],
 
         'cohort_labels': [
-            groups['enabled']['label'],
-            groups['disabled']['label'],
-        ],
-        'cohort_values': [
-            groups['enabled']['listings'],
-            groups['disabled']['listings'],
-        ],
-
-        'accepted_labels': [
-            groups['accepted']['label'],
+            groups['used']['label'],
             groups['ignored']['label'],
         ],
-        'accepted_completion_rates': [
-            round(completion_rate(groups['accepted']), 2),
-            round(completion_rate(groups['ignored']), 2),
+        'cohort_values': [
+            groups['used']['listings'],
+            groups['ignored']['listings'],
         ],
     }
 
     return render(request, 'bq7_dashboard.html', context)
+
 
 def bq1_dashboard(request):
     """

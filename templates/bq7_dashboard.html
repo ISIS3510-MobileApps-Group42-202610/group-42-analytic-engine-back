@@ -8,13 +8,13 @@
     <h3>Business Question (BQ Type 3)</h3>
 
     <p>
-        How does enabling price suggestions influence seller behavior in terms of
+        How does using price suggestions influence seller behavior in terms of
         time-to-sale and transaction completion rate?
     </p>
 
     <p style="margin-top: 8px;">
-        Measured by comparing listings created with price suggestions enabled
-        against listings created without price suggestions.
+        Measured by comparing listings where the seller accepted the suggested price
+        against listings where the seller ignored it and set a manual price.
     </p>
 </div>
 
@@ -82,7 +82,7 @@
         </div>
 
         <div class="subline">
-            Difference between enabled and disabled groups
+            Suggestion used minus suggestion ignored
         </div>
     </div>
 
@@ -95,31 +95,31 @@
         </div>
 
         <div class="subline">
-            Enabled group minus disabled group
+            Suggestion used minus suggestion ignored
         </div>
     </div>
 
     <div class="card">
-        <div class="label">Listings with Suggestion</div>
+        <div class="label">Listings Using Suggestion</div>
 
         <div class="value">
             {{ enabled_listings }}
         </div>
 
         <div class="subline">
-            Listings created with price suggestion enabled
+            Listings where seller accepted suggested price
         </div>
     </div>
 
     <div class="card">
-        <div class="label">Listings without Suggestion</div>
+        <div class="label">Listings Ignoring Suggestion</div>
 
         <div class="value">
             {{ disabled_listings }}
         </div>
 
         <div class="subline">
-            Listings created without price suggestion
+            Listings where seller used a manual price
         </div>
     </div>
 </div>
@@ -157,12 +157,6 @@
 
         <canvas id="bq7CohortChart"></canvas>
     </div>
-
-    <div class="chart-box">
-        <h3>Suggestion Acceptance Impact</h3>
-
-        <canvas id="bq7AcceptedChart"></canvas>
-    </div>
 </div>
 
 <div class="methodology-box">
@@ -170,13 +164,13 @@
 
     <ul>
         <li>
-            Price suggestion enabled:
-            <code>listing_created.metadata.price_suggestion_enabled = true</code>.
+            Suggestion used:
+            <code>listing_created.metadata.price_suggestion_accepted = true</code>.
         </li>
 
         <li>
-            Price suggestion disabled:
-            <code>listing_created.metadata.price_suggestion_enabled = false</code>.
+            Suggestion ignored:
+            <code>listing_created.metadata.price_suggestion_accepted = false</code>.
         </li>
 
         <li>
@@ -189,11 +183,6 @@
             elapsed time between <code>listing_created</code> and
             <code>transaction_completed</code> for the same listing.
         </li>
-
-        <li>
-            Suggestion acceptance:
-            <code>listing_created.metadata.price_suggestion_accepted = true</code>.
-        </li>
     </ul>
 </div>
 
@@ -203,8 +192,6 @@
 {{ avg_time_to_sale_hours|json_script:"bq7-time-values" }}
 {{ cohort_labels|json_script:"bq7-cohort-labels" }}
 {{ cohort_values|json_script:"bq7-cohort-values" }}
-{{ accepted_labels|json_script:"bq7-accepted-labels" }}
-{{ accepted_completion_rates|json_script:"bq7-accepted-values" }}
 
 {% endif %}
 {% endblock %}
@@ -233,18 +220,13 @@
     const cohortLabelsEl = document.getElementById('bq7-cohort-labels');
     const cohortValuesEl = document.getElementById('bq7-cohort-values');
 
-    const acceptedLabelsEl = document.getElementById('bq7-accepted-labels');
-    const acceptedValuesEl = document.getElementById('bq7-accepted-values');
-
     if (
         completionLabelsEl &&
         completionRatesEl &&
         timeLabelsEl &&
         timeValuesEl &&
         cohortLabelsEl &&
-        cohortValuesEl &&
-        acceptedLabelsEl &&
-        acceptedValuesEl
+        cohortValuesEl
     ) {
         const completionLabels = JSON.parse(completionLabelsEl.textContent);
         const completionRates = JSON.parse(completionRatesEl.textContent);
@@ -254,9 +236,6 @@
 
         const cohortLabels = JSON.parse(cohortLabelsEl.textContent);
         const cohortValues = JSON.parse(cohortValuesEl.textContent);
-
-        const acceptedLabels = JSON.parse(acceptedLabelsEl.textContent);
-        const acceptedValues = JSON.parse(acceptedValuesEl.textContent);
 
         createBarChart(
             'bq7CompletionRateChart',
@@ -280,14 +259,6 @@
             cohortValues,
             'Listings Created',
             'Listings'
-        );
-
-        createBarChart(
-            'bq7AcceptedChart',
-            acceptedLabels,
-            acceptedValues,
-            'Completion Rate (%)',
-            'Completion Rate (%)'
         );
     }
 </script>
