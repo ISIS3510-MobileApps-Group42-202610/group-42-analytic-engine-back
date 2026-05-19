@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+
+{% block title %}BQ7: Price Suggestions Impact - Analytics Dashboard{% endblock %}
+{% block nav_bq7 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ Type 3)</h3>
+
+    <p>
+        How does enabling price suggestions influence seller behavior in terms of
+        time-to-sale and transaction completion rate?
+    </p>
+
+    <p style="margin-top: 8px;">
+        Measured by comparing listings created with price suggestions enabled
+        against listings created without price suggestions.
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq7FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+
+            <select name="period" id="period">
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>
+                    All Time
+                </option>
+
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>
+                    Last 30 Days
+                </option>
+
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>
+                    Semester to Date
+                </option>
+
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>
+                    Custom Range
+                </option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}"
+             id="customRangeFields">
+            <label for="start">Start</label>
+
+            <input type="datetime-local"
+                   name="start"
+                   id="start"
+                   value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}"
+             id="customRangeFieldsEnd">
+            <label for="end">End</label>
+
+            <input type="datetime-local"
+                   name="end"
+                   id="end"
+                   value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">
+        Current: {{ period_display }}
+    </div>
+</div>
+
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Completion Rate Lift</div>
+
+        <div class="value">
+            {{ completion_rate_lift_pct|floatformat:2 }}
+            <span class="unit">pp</span>
+        </div>
+
+        <div class="subline">
+            Difference between enabled and disabled groups
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Avg Time-to-Sale Difference</div>
+
+        <div class="value">
+            {{ avg_time_to_sale_difference_hours|floatformat:1 }}
+            <span class="unit">h</span>
+        </div>
+
+        <div class="subline">
+            Enabled group minus disabled group
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Listings with Suggestion</div>
+
+        <div class="value">
+            {{ enabled_listings }}
+        </div>
+
+        <div class="subline">
+            Listings created with price suggestion enabled
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Listings without Suggestion</div>
+
+        <div class="value">
+            {{ disabled_listings }}
+        </div>
+
+        <div class="subline">
+            Listings created without price suggestion
+        </div>
+    </div>
+</div>
+
+{% if total_listings == 0 %}
+<div class="methodology-box">
+    <h3>No BQ7 data available yet</h3>
+
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+        <li>No <code>listing_created</code> events have been recorded yet.</li>
+        <li>Create listings from the mobile app to populate this dashboard.</li>
+    </ul>
+</div>
+
+{% else %}
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Transaction Completion Rate</h3>
+
+        <canvas id="bq7CompletionRateChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Average Time-to-Sale</h3>
+
+        <canvas id="bq7TimeToSaleChart"></canvas>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Listing Cohort Size</h3>
+
+        <canvas id="bq7CohortChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Suggestion Acceptance Impact</h3>
+
+        <canvas id="bq7AcceptedChart"></canvas>
+    </div>
+</div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+
+    <ul>
+        <li>
+            Price suggestion enabled:
+            <code>listing_created.metadata.price_suggestion_enabled = true</code>.
+        </li>
+
+        <li>
+            Price suggestion disabled:
+            <code>listing_created.metadata.price_suggestion_enabled = false</code>.
+        </li>
+
+        <li>
+            Transaction completion rate:
+            completed listings divided by created listings in each group.
+        </li>
+
+        <li>
+            Time-to-sale:
+            elapsed time between <code>listing_created</code> and
+            <code>transaction_completed</code> for the same listing.
+        </li>
+
+        <li>
+            Suggestion acceptance:
+            <code>listing_created.metadata.price_suggestion_accepted = true</code>.
+        </li>
+    </ul>
+</div>
+
+{{ completion_labels|json_script:"bq7-completion-labels" }}
+{{ completion_rates|json_script:"bq7-completion-rates" }}
+{{ time_to_sale_labels|json_script:"bq7-time-labels" }}
+{{ avg_time_to_sale_hours|json_script:"bq7-time-values" }}
+{{ cohort_labels|json_script:"bq7-cohort-labels" }}
+{{ cohort_values|json_script:"bq7-cohort-values" }}
+{{ accepted_labels|json_script:"bq7-accepted-labels" }}
+{{ accepted_completion_rates|json_script:"bq7-accepted-values" }}
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const periodSelect = document.getElementById('period');
+    const customStart = document.getElementById('customRangeFields');
+    const customEnd = document.getElementById('customRangeFieldsEnd');
+
+    if (periodSelect) {
+        periodSelect.addEventListener('change', function () {
+            const show = this.value === 'custom';
+
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    const completionLabelsEl = document.getElementById('bq7-completion-labels');
+    const completionRatesEl = document.getElementById('bq7-completion-rates');
+
+    const timeLabelsEl = document.getElementById('bq7-time-labels');
+    const timeValuesEl = document.getElementById('bq7-time-values');
+
+    const cohortLabelsEl = document.getElementById('bq7-cohort-labels');
+    const cohortValuesEl = document.getElementById('bq7-cohort-values');
+
+    const acceptedLabelsEl = document.getElementById('bq7-accepted-labels');
+    const acceptedValuesEl = document.getElementById('bq7-accepted-values');
+
+    if (
+        completionLabelsEl &&
+        completionRatesEl &&
+        timeLabelsEl &&
+        timeValuesEl &&
+        cohortLabelsEl &&
+        cohortValuesEl &&
+        acceptedLabelsEl &&
+        acceptedValuesEl
+    ) {
+        const completionLabels = JSON.parse(completionLabelsEl.textContent);
+        const completionRates = JSON.parse(completionRatesEl.textContent);
+
+        const timeLabels = JSON.parse(timeLabelsEl.textContent);
+        const timeValues = JSON.parse(timeValuesEl.textContent);
+
+        const cohortLabels = JSON.parse(cohortLabelsEl.textContent);
+        const cohortValues = JSON.parse(cohortValuesEl.textContent);
+
+        const acceptedLabels = JSON.parse(acceptedLabelsEl.textContent);
+        const acceptedValues = JSON.parse(acceptedValuesEl.textContent);
+
+        createBarChart(
+            'bq7CompletionRateChart',
+            completionLabels,
+            completionRates,
+            'Completion Rate (%)',
+            'Completion Rate (%)'
+        );
+
+        createBarChart(
+            'bq7TimeToSaleChart',
+            timeLabels,
+            timeValues,
+            'Average Time-to-Sale (hours)',
+            'Hours'
+        );
+
+        createBarChart(
+            'bq7CohortChart',
+            cohortLabels,
+            cohortValues,
+            'Listings Created',
+            'Listings'
+        );
+
+        createBarChart(
+            'bq7AcceptedChart',
+            acceptedLabels,
+            acceptedValues,
+            'Completion Rate (%)',
+            'Completion Rate (%)'
+        );
+    }
+</script>
+{% endblock %}

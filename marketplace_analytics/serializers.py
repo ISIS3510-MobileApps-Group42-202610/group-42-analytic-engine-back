@@ -13,6 +13,9 @@ class AnalyticsEventIngestSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(source='occurred_at', required=False)
 
     EVENT_ALIASES = {
+        'listing_created': AnalyticsEvent.EventName.LISTING_CREATED,
+        'product_created': AnalyticsEvent.EventName.LISTING_CREATED,
+        'listing_published': AnalyticsEvent.EventName.LISTING_CREATED,
         'listing_opened': AnalyticsEvent.EventName.LISTING_VIEWED,
         'view_listing': AnalyticsEvent.EventName.LISTING_VIEWED,
         'product_viewed': AnalyticsEvent.EventName.LISTING_VIEWED,

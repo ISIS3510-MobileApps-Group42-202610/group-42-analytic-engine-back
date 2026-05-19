@@ -85,6 +85,7 @@ class AnalyticsEvent(models.Model):
     """
 
     class EventName(models.TextChoices):
+        LISTING_CREATED = 'listing_created', 'Listing Created'
         LISTING_VIEWED = 'listing_viewed', 'Listing Viewed'
         CHAT_STARTED = 'chat_started', 'Chat Started'
         FIRST_MESSAGE_SENT = 'first_message_sent', 'First Message Sent'

@@ -47,6 +47,9 @@ from marketplace_analytics.services import (
 
 
 BUSINESS_EVENT_NAMES_AND_ALIASES = {
+    'listing_created',
+    'product_created',
+    'listing_published',
     'listing_viewed',
     'listing_opened',
     'view_listing',
