@@ -1,6 +1,7 @@
 from django.urls import path
 
 from marketplace_analytics.views import (
+    bq7_dashboard,
     bq1_dashboard,
     bq11_dashboard,
     bq12_dashboard,
@@ -54,6 +55,7 @@ urlpatterns = [
     path('api/dashboard/bq4', bq4_dashboard, name='bq4-dashboard'),
     path('api/dashboard/bq11', bq11_dashboard, name='bq11-dashboard'),
     path('api/dashboard/bq12', bq12_dashboard, name='bq12-dashboard'),
+    path('api/dashboard/bq7', bq7_dashboard, name='bq7-dashboard'),
 
     # ====== BQ6 Messaging Response Time ==========
 

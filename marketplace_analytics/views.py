@@ -333,6 +333,184 @@ def bq2_dashboard(request):
     # se renderiza con las graficas y eso bonito para el analytics persona
     return render(request, 'bq2_dashboard.html', context)
 
+def bq7_dashboard(request):
+    """
+    Dashboard for BQ7:
+    How does enabling price suggestions influence seller behavior in terms of
+    time-to-sale and transaction completion rate?
+    """
+    from marketplace_analytics.models import AnalyticsEvent
+
+    period, start, end = _extract_period_params(request)
+    since, until, resolved_period = resolve_reporting_window(
+        period=period,
+        start=start,
+        end=end,
+    )
+
+    created_events = AnalyticsEvent.objects.filter(
+        event_name='listing_created',
+    )
+
+    if since is not None:
+        created_events = created_events.filter(occurred_at__gte=since)
+    if until is not None:
+        created_events = created_events.filter(occurred_at__lte=until)
+
+    transaction_events = AnalyticsEvent.objects.filter(
+        event_name='transaction_completed',
+    )
+
+    created_by_listing = {}
+    for event in created_events.order_by('occurred_at', 'id'):
+        if event.listing_id not in created_by_listing:
+            metadata = event.metadata or {}
+            created_by_listing[event.listing_id] = {
+                'listing_id': event.listing_id,
+                'created_at': event.occurred_at,
+                'price_suggestion_enabled': bool(
+                    metadata.get('price_suggestion_enabled', False)
+                ),
+                'price_suggestion_accepted': bool(
+                    metadata.get('price_suggestion_accepted', False)
+                ),
+            }
+
+    transactions_by_listing = {}
+    for event in transaction_events.order_by('occurred_at', 'id'):
+        if event.listing_id not in transactions_by_listing:
+            transactions_by_listing[event.listing_id] = event.occurred_at
+
+    groups = {
+        'enabled': {
+            'label': 'Suggestion Enabled',
+            'listings': 0,
+            'completed': 0,
+            'time_to_sale_hours': [],
+        },
+        'disabled': {
+            'label': 'Suggestion Disabled',
+            'listings': 0,
+            'completed': 0,
+            'time_to_sale_hours': [],
+        },
+        'accepted': {
+            'label': 'Suggestion Accepted',
+            'listings': 0,
+            'completed': 0,
+            'time_to_sale_hours': [],
+        },
+        'ignored': {
+            'label': 'Suggestion Ignored',
+            'listings': 0,
+            'completed': 0,
+            'time_to_sale_hours': [],
+        },
+    }
+
+    for listing_id, created in created_by_listing.items():
+        enabled = created['price_suggestion_enabled']
+        accepted = created['price_suggestion_accepted']
+
+        main_key = 'enabled' if enabled else 'disabled'
+        groups[main_key]['listings'] += 1
+
+        if enabled:
+            secondary_key = 'accepted' if accepted else 'ignored'
+            groups[secondary_key]['listings'] += 1
+        else:
+            secondary_key = None
+
+        completed_at = transactions_by_listing.get(listing_id)
+
+        if completed_at is not None and completed_at >= created['created_at']:
+            hours = (
+                completed_at - created['created_at']
+            ).total_seconds() / 3600
+
+            groups[main_key]['completed'] += 1
+            groups[main_key]['time_to_sale_hours'].append(hours)
+
+            if secondary_key is not None:
+                groups[secondary_key]['completed'] += 1
+                groups[secondary_key]['time_to_sale_hours'].append(hours)
+
+    def completion_rate(group):
+        if group['listings'] == 0:
+            return 0
+        return (group['completed'] / group['listings']) * 100
+
+    def avg_time(group):
+        values = group['time_to_sale_hours']
+        if not values:
+            return 0
+        return sum(values) / len(values)
+
+    enabled_rate = completion_rate(groups['enabled'])
+    disabled_rate = completion_rate(groups['disabled'])
+
+    enabled_avg_time = avg_time(groups['enabled'])
+    disabled_avg_time = avg_time(groups['disabled'])
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    context = {
+        'selected_period': resolved_period,
+        'period_display': period_label_map.get(resolved_period, resolved_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+
+        'total_listings': len(created_by_listing),
+
+        'enabled_listings': groups['enabled']['listings'],
+        'disabled_listings': groups['disabled']['listings'],
+
+        'completion_rate_lift_pct': enabled_rate - disabled_rate,
+        'avg_time_to_sale_difference_hours': enabled_avg_time - disabled_avg_time,
+
+        'completion_labels': [
+            groups['enabled']['label'],
+            groups['disabled']['label'],
+        ],
+        'completion_rates': [
+            round(enabled_rate, 2),
+            round(disabled_rate, 2),
+        ],
+
+        'time_to_sale_labels': [
+            groups['enabled']['label'],
+            groups['disabled']['label'],
+        ],
+        'avg_time_to_sale_hours': [
+            round(enabled_avg_time, 2),
+            round(disabled_avg_time, 2),
+        ],
+
+        'cohort_labels': [
+            groups['enabled']['label'],
+            groups['disabled']['label'],
+        ],
+        'cohort_values': [
+            groups['enabled']['listings'],
+            groups['disabled']['listings'],
+        ],
+
+        'accepted_labels': [
+            groups['accepted']['label'],
+            groups['ignored']['label'],
+        ],
+        'accepted_completion_rates': [
+            round(completion_rate(groups['accepted']), 2),
+            round(completion_rate(groups['ignored']), 2),
+        ],
+    }
+
+    return render(request, 'bq7_dashboard.html', context)
 
 def bq1_dashboard(request):
     """
