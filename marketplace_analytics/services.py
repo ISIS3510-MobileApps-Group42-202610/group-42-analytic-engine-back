@@ -10,6 +10,52 @@ from typing import Iterable, TypedDict, cast
 
 from marketplace_analytics.models import CrashEvent, AnalyticsEvent, ListingAnalyticsState, SearchDiscoveryEvent, MessagingResponseEvent
 
+# ── BQ13 Academic calendar ────────────────────────────────────────────────────
+
+_ACADEMIC_PERIOD_ORDER = [
+    'break_winter',
+    'sem1_start',
+    'sem1_mid',
+    'sem1_finals',
+    'break_summer',
+    'sem2_start',
+    'sem2_mid',
+    'sem2_finals',
+]
+
+_ACADEMIC_PERIOD_LABELS = {
+    'break_winter': 'Winter Break (Dec–Jan)',
+    'sem1_start':   'Sem 1 – Start (Jan–Feb)',
+    'sem1_mid':     'Sem 1 – Mid (Mar–Apr)',
+    'sem1_finals':  'Sem 1 – Finals (May–Jun)',
+    'break_summer': 'Summer Break (Jun–Jul)',
+    'sem2_start':   'Sem 2 – Start (Jul–Aug)',
+    'sem2_mid':     'Sem 2 – Mid (Sep–Oct)',
+    'sem2_finals':  'Sem 2 – Finals (Nov–Dec)',
+}
+
+
+def _classify_academic_period(dt) -> str:
+    """Return an academic-period key for a datetime (Colombian university calendar)."""
+    m, d = dt.month, dt.day
+    if (m == 12 and d >= 16) or (m == 1 and d <= 20):
+        return 'break_winter'
+    if (m == 1 and d >= 21) or m == 2:
+        return 'sem1_start'
+    if m in (3, 4):
+        return 'sem1_mid'
+    if m == 5 or (m == 6 and d <= 20):
+        return 'sem1_finals'
+    if (m == 6 and d >= 21) or (m == 7 and d <= 20):
+        return 'break_summer'
+    if (m == 7 and d >= 21) or m == 8:
+        return 'sem2_start'
+    if m in (9, 10):
+        return 'sem2_mid'
+    if m == 11 or (m == 12 and d <= 15):
+        return 'sem2_finals'
+    return 'break_winter'
+
 
 MESSAGING_EVENTS = {
     AnalyticsEvent.EventName.FIRST_MESSAGE_SENT,
@@ -202,6 +248,160 @@ def resolve_reporting_window(period: str, start=None, end=None):
         return start, end, period
 
     return None, None, 'all_time'
+
+
+def calculate_bq13_top_selling_products(
+    since=None,
+    until=None,
+    period_label: str = 'last_6_months',
+):
+    """
+    BQ13: How do product category, price suggestion usage, and academic calendar
+    periods influence the top-selling products over the last six months?
+
+    Joins transaction_completed events (which carry category) with listing_created
+    events (which carry price_suggestion_accepted) on listing_id, then segments
+    results by academic calendar period derived from the transaction timestamp.
+    """
+    now = timezone.now()
+    effective_since = since if since is not None else (now - timedelta(days=180))
+    effective_until = until
+
+    transactions_qs = AnalyticsEvent.objects.filter(
+        event_name=AnalyticsEvent.EventName.TRANSACTION_COMPLETED,
+        occurred_at__gte=effective_since,
+    )
+    if effective_until is not None:
+        transactions_qs = transactions_qs.filter(occurred_at__lte=effective_until)
+
+    transactions_list = list(
+        transactions_qs.values('listing_id', 'metadata', 'occurred_at')
+    )
+
+    if not transactions_list:
+        empty_periods = [
+            {'period': k, 'name': _ACADEMIC_PERIOD_LABELS[k], 'count': 0, 'top_category': 'N/A'}
+            for k in _ACADEMIC_PERIOD_ORDER
+        ]
+        return {
+            'total_transactions': 0,
+            'unique_categories': 0,
+            'price_suggestion_used': 0,
+            'price_suggestion_not_used': 0,
+            'price_suggestion_unknown': 0,
+            'price_suggestion_rate': 0.0,
+            'category_labels': [],
+            'category_counts': [],
+            'category_revenue': [],
+            'top_categories': [],
+            'period_breakdown': empty_periods,
+            'period_labels': [_ACADEMIC_PERIOD_LABELS[k] for k in _ACADEMIC_PERIOD_ORDER],
+            'heatmap_datasets': [],
+        }
+
+    listing_ids = [t['listing_id'] for t in transactions_list]
+
+    created_qs = AnalyticsEvent.objects.filter(
+        event_name=AnalyticsEvent.EventName.LISTING_CREATED,
+        listing_id__in=listing_ids,
+    ).values('listing_id', 'metadata')
+
+    price_suggestion_map: dict[int, bool | None] = {}
+    for row in created_qs:
+        lid = row['listing_id']
+        if lid not in price_suggestion_map:
+            meta = row.get('metadata') or {}
+            raw = meta.get('price_suggestion_accepted')
+            if raw is True or raw == 'true' or raw == 1:
+                price_suggestion_map[lid] = True
+            elif raw is False or raw == 'false' or raw == 0:
+                price_suggestion_map[lid] = False
+
+    category_counts: dict[str, int] = {}
+    category_revenue: dict[str, float] = {}
+    category_ps_used: dict[str, int] = {}
+    period_counts: dict[str, int] = {k: 0 for k in _ACADEMIC_PERIOD_ORDER}
+    period_category: dict[str, dict[str, int]] = {k: {} for k in _ACADEMIC_PERIOD_ORDER}
+
+    total_ps_used = total_ps_not_used = total_ps_unknown = 0
+
+    for t in transactions_list:
+        meta = t.get('metadata') or {}
+        category = (meta.get('category') or 'unknown').strip().lower()
+        price = float(meta.get('price') or 0)
+        occurred = t.get('occurred_at')
+        listing_id = t['listing_id']
+
+        category_counts[category] = category_counts.get(category, 0) + 1
+        category_revenue[category] = category_revenue.get(category, 0) + price
+
+        ps = price_suggestion_map.get(listing_id)
+        if ps is True:
+            category_ps_used[category] = category_ps_used.get(category, 0) + 1
+            total_ps_used += 1
+        elif ps is False:
+            total_ps_not_used += 1
+        else:
+            total_ps_unknown += 1
+
+        if occurred:
+            pk = _classify_academic_period(occurred)
+            period_counts[pk] = period_counts.get(pk, 0) + 1
+            period_category[pk][category] = period_category[pk].get(category, 0) + 1
+
+    sorted_categories = sorted(category_counts.items(), key=lambda x: -x[1])
+    top_categories_raw = sorted_categories[:10]
+
+    top_categories = []
+    for cat, count in top_categories_raw:
+        ps_used = category_ps_used.get(cat, 0)
+        ps_rate = round(ps_used / count * 100, 1) if count else 0.0
+        top_categories.append({
+            'category': cat,
+            'count': count,
+            'revenue': round(category_revenue.get(cat, 0), 2),
+            'price_suggestion_used': ps_used,
+            'price_suggestion_rate': ps_rate,
+        })
+
+    period_breakdown = []
+    for pk in _ACADEMIC_PERIOD_ORDER:
+        cat_dist = period_category.get(pk, {})
+        top_cat = max(cat_dist, key=cat_dist.get) if cat_dist else 'N/A'
+        period_breakdown.append({
+            'period': pk,
+            'name': _ACADEMIC_PERIOD_LABELS[pk],
+            'count': period_counts.get(pk, 0),
+            'top_category': top_cat,
+        })
+
+    top_5_cats = [c for c, _ in top_categories_raw[:5]]
+    heatmap_datasets = [
+        {
+            'label': cat,
+            'data': [period_category.get(pk, {}).get(cat, 0) for pk in _ACADEMIC_PERIOD_ORDER],
+        }
+        for cat in top_5_cats
+    ]
+
+    ps_denominator = total_ps_used + total_ps_not_used
+    ps_rate_overall = round(total_ps_used / ps_denominator * 100, 1) if ps_denominator else 0.0
+
+    return {
+        'total_transactions': sum(category_counts.values()),
+        'unique_categories': len(category_counts),
+        'price_suggestion_used': total_ps_used,
+        'price_suggestion_not_used': total_ps_not_used,
+        'price_suggestion_unknown': total_ps_unknown,
+        'price_suggestion_rate': ps_rate_overall,
+        'category_labels': [c for c, _ in top_categories_raw],
+        'category_counts': [n for _, n in top_categories_raw],
+        'category_revenue': [round(category_revenue.get(c, 0), 2) for c, _ in top_categories_raw],
+        'top_categories': top_categories,
+        'period_breakdown': period_breakdown,
+        'period_labels': [_ACADEMIC_PERIOD_LABELS[k] for k in _ACADEMIC_PERIOD_ORDER],
+        'heatmap_datasets': heatmap_datasets,
+    }
 
 
 def calculate_bq1_crash_hotspot_metric(

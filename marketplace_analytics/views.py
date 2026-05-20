@@ -42,7 +42,8 @@ from marketplace_analytics.services import (
     calculate_q9_messaging_impact_metric_with_filters,
     resolve_reporting_window,
     ingest_messaging_response_event,
-    calculate_bq6_seller_response_time_metric
+    calculate_bq6_seller_response_time_metric,
+    calculate_bq13_top_selling_products,
 )
 
 
@@ -1896,6 +1897,90 @@ def bq10_campus_events_endpoint(request):
         return JsonResponse({'status': 'Invalid JSON'}, status=400)
     except Exception as e:
         return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+
+
+def bq13_dashboard(request):
+    """
+    Dashboard for BQ13: How do product category, price suggestion usage, and academic
+    calendar periods influence the top-selling products over the last six months?
+    """
+    params = request.GET
+
+    raw_period = (params.get('period') or 'last_6_months').strip()
+    valid_periods = {'all_time', 'last_30_days', 'last_6_months', 'semester_to_date', 'custom'}
+    if raw_period not in valid_periods:
+        raw_period = 'last_6_months'
+
+    start = end = None
+    if raw_period == 'custom':
+        start_raw = params.get('start')
+        end_raw = params.get('end')
+        start = parse_datetime(str(start_raw)) if start_raw else None
+        end = parse_datetime(str(end_raw)) if end_raw else None
+        if start and timezone.is_naive(start):
+            start = timezone.make_aware(start, dt_timezone.utc)
+        if end and timezone.is_naive(end):
+            end = timezone.make_aware(end, dt_timezone.utc)
+
+    now = timezone.now()
+    if raw_period == 'last_6_months':
+        since = now - timedelta(days=183)
+        until = None
+    elif raw_period == 'last_30_days':
+        since = now - timedelta(days=30)
+        until = None
+    elif raw_period == 'semester_to_date':
+        from marketplace_analytics.services import _semester_start_for
+        since = _semester_start_for(now)
+        until = None
+    elif raw_period == 'custom':
+        since = start
+        until = end
+    else:
+        since = None
+        until = None
+
+    report = calculate_bq13_top_selling_products(
+        since=since,
+        until=until,
+        period_label=raw_period,
+    )
+
+    period_label_map = {
+        'all_time': 'All Time',
+        'last_30_days': 'Last 30 Days',
+        'last_6_months': 'Last 6 Months',
+        'semester_to_date': 'Semester to Date',
+        'custom': 'Custom Range',
+    }
+
+    context = {
+        'selected_period': raw_period,
+        'period_display': period_label_map.get(raw_period, raw_period),
+        'custom_start': start.isoformat().replace('+00:00', 'Z') if start else '',
+        'custom_end': end.isoformat().replace('+00:00', 'Z') if end else '',
+
+        'total_transactions': report['total_transactions'],
+        'unique_categories': report['unique_categories'],
+
+        'price_suggestion_used': report['price_suggestion_used'],
+        'price_suggestion_not_used': report['price_suggestion_not_used'],
+        'price_suggestion_unknown': report['price_suggestion_unknown'],
+        'price_suggestion_rate': report['price_suggestion_rate'],
+
+        'category_labels': report['category_labels'],
+        'category_counts': report['category_counts'],
+        'category_revenue': report['category_revenue'],
+
+        'top_categories': report['top_categories'],
+        'ps_rate_labels': [c['category'] for c in report['top_categories']],
+        'ps_rate_values': [c['price_suggestion_rate'] for c in report['top_categories']],
+        'period_breakdown': report['period_breakdown'],
+        'period_labels': report['period_labels'],
+        'heatmap_datasets': report['heatmap_datasets'],
+    }
+
+    return render(request, 'bq13_dashboard.html', context)
 
 
 def bq10_dashboard(request):

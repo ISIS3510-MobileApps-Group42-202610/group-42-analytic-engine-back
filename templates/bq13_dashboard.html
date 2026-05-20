@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}BQ13: Top-Selling Products – Analytics Dashboard{% endblock %}
+{% block nav_bq13 %}active{% endblock %}
+
+{% block content %}
+<div class="bq-box">
+    <h3>Business Question (BQ13 – Type 3)</h3>
+    <p>
+        How do product category, price suggestion usage, and academic calendar periods
+        influence the top-selling products over the last six months?
+    </p>
+    <p style="margin-top: 8px;">
+        Measured by correlating <code>transaction_completed</code> events (which carry
+        <code>category</code>) with <code>listing_created</code> events (which carry
+        <code>price_suggestion_accepted</code>), segmented by academic calendar period
+        derived from the transaction timestamp.
+    </p>
+</div>
+
+<div class="filter-panel">
+    <form method="get" action="" class="filter-form" id="bq13FilterForm">
+        <div class="filter-item">
+            <label for="period">Analysis Period</label>
+            <select name="period" id="period">
+                <option value="last_6_months" {% if selected_period == 'last_6_months' %}selected{% endif %}>
+                    Last 6 Months
+                </option>
+                <option value="all_time" {% if selected_period == 'all_time' %}selected{% endif %}>
+                    All Time
+                </option>
+                <option value="last_30_days" {% if selected_period == 'last_30_days' %}selected{% endif %}>
+                    Last 30 Days
+                </option>
+                <option value="semester_to_date" {% if selected_period == 'semester_to_date' %}selected{% endif %}>
+                    Semester to Date
+                </option>
+                <option value="custom" {% if selected_period == 'custom' %}selected{% endif %}>
+                    Custom Range
+                </option>
+            </select>
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customStart">
+            <label for="start">Start</label>
+            <input type="datetime-local" name="start" id="start" value="{{ custom_start|slice:':16' }}">
+        </div>
+
+        <div class="filter-item custom-range {% if selected_period != 'custom' %}hidden{% endif %}" id="customEnd">
+            <label for="end">End</label>
+            <input type="datetime-local" name="end" id="end" value="{{ custom_end|slice:':16' }}">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div class="period-chip">Current: {{ period_display }}</div>
+</div>
+
+<div class="cards">
+    <div class="card highlight-card">
+        <div class="label">Total Transactions</div>
+        <div class="value">{{ total_transactions }}</div>
+        <div class="subline">In selected period</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Unique Categories</div>
+        <div class="value">{{ unique_categories }}</div>
+        <div class="subline">With at least one sale</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Price Suggestion Adoption</div>
+        <div class="value">{{ price_suggestion_rate }}<span class="unit">%</span></div>
+        <div class="subline">Among sold listings with known status</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Suggestion Used / Ignored</div>
+        <div class="value">{{ price_suggestion_used }} / {{ price_suggestion_not_used }}</div>
+        <div class="subline">{{ price_suggestion_unknown }} with no data</div>
+    </div>
+</div>
+
+{% if total_transactions == 0 %}
+<div class="methodology-box">
+    <h3>No BQ13 data available yet</h3>
+    <ul>
+        <li>The dashboard route is working correctly.</li>
+        <li>No <code>transaction_completed</code> events with <code>category</code> metadata have been recorded in the selected period.</li>
+        <li>Complete purchases from the Flutter app — the buy flow already emits <code>transaction_completed</code> with <code>category</code>.</li>
+        <li>Create listings with price suggestion enabled/disabled to populate the price suggestion dimension.</li>
+    </ul>
+</div>
+
+{% else %}
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Top Categories by Sales Volume</h3>
+        <canvas id="bq13CategoryChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Price Suggestion Adoption by Category</h3>
+        <canvas id="bq13PSRateChart"></canvas>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box" style="grid-column: span 2;">
+        <h3>Top 5 Categories × Academic Calendar Period</h3>
+        <canvas id="bq13HeatmapChart"></canvas>
+    </div>
+</div>
+
+<div class="charts">
+    <div class="chart-box">
+        <h3>Transactions by Academic Period</h3>
+        <canvas id="bq13PeriodChart"></canvas>
+    </div>
+
+    <div class="chart-box">
+        <h3>Price Suggestion Split</h3>
+        <canvas id="bq13PSSplitChart"></canvas>
+    </div>
+</div>
+
+<h3 style="margin: 24px 0 12px;">Top Categories – Detail</h3>
+<div class="table-scroll"><table class="analytics-table">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Category</th>
+            <th>Transactions</th>
+            <th>Revenue (COP)</th>
+            <th>Price Suggestion Used</th>
+            <th>Adoption Rate</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for cat in top_categories %}
+        <tr>
+            <td>{{ forloop.counter }}</td>
+            <td><strong>{{ cat.category }}</strong></td>
+            <td>{{ cat.count }}</td>
+            <td>${{ cat.revenue|floatformat:0|intcomma }}</td>
+            <td>{% if cat.price_suggestion_used > 0 %}Yes{% else %}No{% endif %}</td>
+            <td>{{ cat.price_suggestion_rate }}%</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table></div>
+
+<h3 style="margin: 24px 0 12px;">Sales by Academic Calendar Period</h3>
+<div class="table-scroll"><table class="analytics-table">
+    <thead>
+        <tr>
+            <th>Period</th>
+            <th>Transactions</th>
+            <th>Top Category</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for pb in period_breakdown %}
+        <tr>
+            <td><strong>{{ pb.name }}</strong></td>
+            <td>{{ pb.count }}</td>
+            <td>{{ pb.top_category }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table></div>
+
+<div class="methodology-box">
+    <h3>Methodological Definitions</h3>
+    <ul>
+        <li>
+            <strong>Category</strong>: from <code>transaction_completed.metadata.category</code>,
+            emitted by the Flutter app when a purchase is completed.
+        </li>
+        <li>
+            <strong>Price suggestion usage</strong>: <code>listing_created.metadata.price_suggestion_accepted</code>
+            for the same <code>listing_id</code>, emitted when the seller creates a listing.
+            Listings with no matching creation event are counted as "no data".
+        </li>
+        <li>
+            <strong>Academic calendar</strong>: derived from the transaction timestamp using the
+            Colombian university calendar (UniAndes schedule). Periods: Winter Break (Dec 16–Jan 20),
+            Sem 1 Start (Jan 21–Feb 28), Sem 1 Mid (Mar–Apr), Sem 1 Finals (May–Jun 20),
+            Summer Break (Jun 21–Jul 20), Sem 2 Start (Jul 21–Aug 31), Sem 2 Mid (Sep–Oct),
+            Sem 2 Finals (Nov–Dec 15).
+        </li>
+        <li>
+            <strong>Adoption rate</strong>: listings where <code>price_suggestion_accepted = true</code>
+            divided by total sold listings with a known suggestion status.
+        </li>
+    </ul>
+</div>
+
+{{ category_labels|json_script:"bq13-cat-labels" }}
+{{ category_counts|json_script:"bq13-cat-counts" }}
+{{ period_labels|json_script:"bq13-period-labels" }}
+{{ heatmap_datasets|json_script:"bq13-heatmap-datasets" }}
+{{ ps_rate_labels|json_script:"bq13-ps-rate-labels" }}
+{{ ps_rate_values|json_script:"bq13-ps-rate-values" }}
+
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // ── Period filter toggle ─────────────────────────────────────────────────
+    const periodSel   = document.getElementById('period');
+    const customStart = document.getElementById('customStart');
+    const customEnd   = document.getElementById('customEnd');
+    if (periodSel) {
+        periodSel.addEventListener('change', function () {
+            const show = this.value === 'custom';
+            customStart.classList.toggle('hidden', !show);
+            customEnd.classList.toggle('hidden', !show);
+        });
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function parseJsonScript(id) {
+        const el = document.getElementById(id);
+        return el ? JSON.parse(el.textContent) : null;
+    }
+
+    // ── 1. Top categories by volume ──────────────────────────────────────────
+    const catLabels = parseJsonScript('bq13-cat-labels');
+    const catCounts = parseJsonScript('bq13-cat-counts');
+    if (catLabels && catCounts) {
+        createBarChart('bq13CategoryChart', catLabels, catCounts, 'Transactions', 'Transactions');
+    }
+
+    // ── 2. Price suggestion adoption rate by category ────────────────────────
+    const psRateLabels = parseJsonScript('bq13-ps-rate-labels');
+    const psRateValues = parseJsonScript('bq13-ps-rate-values');
+    if (psRateLabels && psRateValues) {
+        createBarChart('bq13PSRateChart', psRateLabels, psRateValues, 'Price Suggestion Adoption Rate (%)', '%');
+    }
+
+    // ── 3. Category × academic period (grouped bar) ──────────────────────────
+    const periodLabels    = parseJsonScript('bq13-period-labels');
+    const heatmapDatasets = parseJsonScript('bq13-heatmap-datasets');
+    if (periodLabels && heatmapDatasets) {
+        try {
+            const PALETTE = [
+                'rgba(99,102,241,0.8)',
+                'rgba(16,185,129,0.8)',
+                'rgba(245,158,11,0.8)',
+                'rgba(239,68,68,0.8)',
+                'rgba(59,130,246,0.8)',
+            ];
+            const datasets = heatmapDatasets.map((ds, i) => ({
+                label: ds.label,
+                data: ds.data,
+                backgroundColor: PALETTE[i % PALETTE.length],
+            }));
+            new Chart(document.getElementById('bq13HeatmapChart'), {
+                type: 'bar',
+                data: { labels: periodLabels, datasets },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        x: { stacked: false },
+                        y: { beginAtZero: true, title: { display: true, text: 'Transactions' } },
+                    },
+                },
+            });
+        } catch (e) { console.error('BQ13 heatmap error:', e); }
+    }
+
+    // ── 4. Transactions by academic period ───────────────────────────────────
+    if (periodLabels && heatmapDatasets) {
+        try {
+            const periodTotals = periodLabels.map((_, i) =>
+                heatmapDatasets.reduce((sum, ds) => sum + (ds.data[i] || 0), 0)
+            );
+            createBarChart('bq13PeriodChart', periodLabels, periodTotals, 'Transactions per Academic Period', 'Transactions');
+        } catch (e) { console.error('BQ13 period chart error:', e); }
+    }
+
+    // ── 5. Price suggestion split (doughnut) ─────────────────────────────────
+    const psSplitCanvas = document.getElementById('bq13PSSplitChart');
+    if (psSplitCanvas) {
+        new Chart(psSplitCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['Suggestion Used', 'Suggestion Ignored', 'No Data'],
+                datasets: [{
+                    data: [{{ price_suggestion_used }}, {{ price_suggestion_not_used }}, {{ price_suggestion_unknown }}],
+                    backgroundColor: [
+                        'rgba(16,185,129,0.8)',
+                        'rgba(239,68,68,0.8)',
+                        'rgba(156,163,175,0.6)',
+                    ],
+                }],
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { position: 'bottom' } },
+            },
+        });
+    }
+</script>
+
+{% endblock %}

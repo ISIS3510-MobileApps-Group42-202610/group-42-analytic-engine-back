@@ -5,6 +5,7 @@ from marketplace_analytics.views import (
     bq1_dashboard,
     bq11_dashboard,
     bq12_dashboard,
+    bq13_dashboard,
     bq5_dashboard,
     post_performance_event,
     bq2_dashboard,
@@ -71,5 +72,8 @@ urlpatterns = [
     # ====== BQ10 Campus Location Events ==========
     path('api/bq10/events/', bq10_campus_events_endpoint, name='bq10-campus-events'),
     path('api/dashboard/bq10', bq10_dashboard, name='bq10-dashboard'),
+
+    # ====== BQ13 Top-Selling Products ==========
+    path('api/dashboard/bq13', bq13_dashboard, name='bq13-dashboard'),
 
 ]
