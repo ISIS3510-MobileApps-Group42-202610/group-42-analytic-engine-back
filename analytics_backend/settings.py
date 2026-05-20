@@ -14,6 +14,7 @@ from pathlib import Path
 
 # Add these at the top of your settings.py
 import os
+import sys
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qsl
 
@@ -155,9 +156,17 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
+# CompressedManifestStaticFilesStorage requires a pre-built manifest (collectstatic).
+# Fall back to the simple backend when running the test suite so tests never need
+# collectstatic to be run first.
+_RUNNING_TESTS = 'test' in sys.argv
 STORAGES = {
     'staticfiles': {
-        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        'BACKEND': (
+            'django.contrib.staticfiles.storage.StaticFilesStorage'
+            if _RUNNING_TESTS
+            else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+        ),
     },
 }
 
